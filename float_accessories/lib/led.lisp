@@ -51,18 +51,18 @@
     led-brightness led-brightness-highbeam led-brightness-idle
     led-brightness-status led-max-brightness led-dim-on-highbeam-ratio
     ; status
-    led-status-pin led-status-num led-status-type led-status-reversed
+    led-status-pin led-status-num led-status-type led-status-white-output led-status-reversed
     led-status-timing
     ; front
-    led-front-pin led-front-num led-front-type led-front-reversed
+    led-front-pin led-front-num led-front-type led-front-white-output led-front-reversed
     led-front-timing led-front-highbeam-mode led-front-highbeam-pos
     led-front-highbeam-min led-front-highbeam-max led-front-highbeam-pin
     ; rear
-    led-rear-pin led-rear-num led-rear-type led-rear-reversed
+    led-rear-pin led-rear-num led-rear-type led-rear-white-output led-rear-reversed
     led-rear-timing led-rear-highbeam-mode led-rear-highbeam-pos
     led-rear-highbeam-min led-rear-highbeam-max led-rear-highbeam-pin
     ; footpad
-    led-footpad-pin led-footpad-num led-footpad-type led-footpad-reversed
+    led-footpad-pin led-footpad-num led-footpad-type led-footpad-white-output led-footpad-reversed
     led-footpad-timing
     ; button
     led-button-pin led-button-timing
@@ -242,6 +242,7 @@
     ; led-def-strip. The button LED is one pixel, so it has no flag.
     (if started {
         (ext-esp_led-fps 60)
+        ; (ext-esp_led-refresh 250)
         ; Front and rear ease their colour instead of switching it, so a reversal
         ; crossfades white/red rather than swapping in one frame. The rate is
         ; 32nds of the remaining gap per 33 ms, and the render thread runs at
@@ -327,8 +328,37 @@
 ; many rules as you like - the last one wins, which is how precedence is
 ; expressed now.
 
+; Resolve deliberate white by physical strip, independent of travel direction.
+; RGB strips keep RGB white even if a saved RGBW preference is W only.
+; The button has no white-output setting and retains its existing behaviour.
+(defun strip-white (seg) {
+    (var type TYPE-GRBW)
+    (var mode 0)
+    (cond
+        ((= seg seg-front) {
+            (setq type led-front-type) (setq mode led-front-white-output)
+        })
+        ((= seg seg-rear) {
+            (setq type led-rear-type) (setq mode led-rear-white-output)
+        })
+        ((= seg seg-status) {
+            (setq type led-status-type) (setq mode led-status-white-output)
+        })
+        ((= seg seg-footpad) {
+            (setq type led-footpad-type) (setq mode led-footpad-white-output)
+        })
+    )
+    (cond
+        ((< type TYPE-GRBW) 0x00FFFFFFu32)
+        ((= mode 1) 0xFF000000u32)
+        ((= mode 2) 0x00FFFFFFu32)
+        (t 0xFFFFFFFFu32)
+    )
+})
+
 (defun seg-want (seg fx pal color spd bri val cyc) {
     (if (>= seg 0) {
+        (if (= color 0xFFFFFFFFu32) (setq color (strip-white seg)))
         (var o (* seg 8))
         (bufset-u8 seg-want-look o fx)
         (bufset-u8 seg-want-look (+ o 1) pal)
@@ -417,7 +447,7 @@
 (defun seg-overlay-bri (seg bri) {
     (if (>= seg 0) {
         (if (!= (bufget-u16 seg-cache-ov (* seg 2)) bri) {
-            (ext-esp_led-seg-overlay seg 0xFFFFFFFFu32 bri)
+            (ext-esp_led-seg-overlay seg (strip-white seg) bri)
             (bufset-u16 seg-cache-ov (* seg 2) bri)
         })
     })

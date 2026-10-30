@@ -23,6 +23,7 @@ LED_MODES = [
     "Felony", "Trans Pride",
 ]
 COLOR_ORDERS = ["GRB", "RGB", "GRBW", "RGBW"]
+WHITE_OUTPUTS = ["RGB + W", "W only", "RGB only"]
 # One enum per strip doubles as the enable switch and the wire timing of
 # the esp_led driver: 0 disables the strip, the other values select the
 # timing. Universal covers all the listed families; a specific preset can
@@ -273,6 +274,12 @@ PARAMS = [
     # --- Internal ----------------------------------------------------------
     ("accept_tos", "TOS Accepted", (B,), 0,
      "Set once the terms-of-service prompt was accepted."),
+
+    # UI grouping is independent of wire order.
+    *[("led_%s_white_output" % strip, "White Output", (E, WHITE_OUTPUTS), 0,
+       "Channels used for deliberate white on RGBW strips. RGB + W preserves"
+       " the existing output; coloured effects are unchanged.")
+      for strip in ("front", "rear", "status", "footpad")],
 ]
 
 GROUPS = [
@@ -294,20 +301,20 @@ GROUPS = [
                      "led_loop_delay",
                      "led_show_battery_charging"]),
         ("Front", ["led_front_timing", "led_front_pin", "led_front_num",
-                   "led_front_type", "led_front_reversed",
+                   "led_front_type", "led_front_white_output", "led_front_reversed",
                    "::sep::Highbeam", "led_front_highbeam_mode", "led_front_highbeam_pin",
                    "led_front_highbeam_pos", "led_front_highbeam_min",
                    "led_front_highbeam_max"]),
         ("Rear", ["led_rear_timing", "led_rear_pin", "led_rear_num",
-                  "led_rear_type", "led_rear_reversed",
+                  "led_rear_type", "led_rear_white_output", "led_rear_reversed",
                   "::sep::Highbeam", "led_rear_highbeam_mode", "led_rear_highbeam_pin",
                   "led_rear_highbeam_pos", "led_rear_highbeam_min",
                   "led_rear_highbeam_max"]),
         ("Status Bar", ["led_status_timing", "led_status_pin",
-                        "led_status_num", "led_status_type",
+                        "led_status_num", "led_status_type", "led_status_white_output",
                         "led_status_reversed"]),
         ("Footpad", ["led_footpad_timing", "led_footpad_pin",
-                     "led_footpad_num", "led_footpad_type",
+                     "led_footpad_num", "led_footpad_type", "led_footpad_white_output",
                      "led_footpad_reversed"]),
         ("Button", ["led_button_timing", "led_button_pin"]),
         ("Pubmote", ["pubmote_loop_delay",

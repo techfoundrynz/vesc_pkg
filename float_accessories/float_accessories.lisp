@@ -245,6 +245,9 @@
     (spawn-with-restart "config-watch" nil config-watch-loop)
 })
 
-(image-save)
-(main)
 @const-end
+
+; Finish constant definitions before saving or running startup. A failed save
+; can leave a partial image with main present, so never continue silently.
+(if (not (image-save)) (exit-error "Could not save startup image"))
+(main)

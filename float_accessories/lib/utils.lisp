@@ -91,18 +91,23 @@
     (cond
         ((>= v (ix voltage-curve 0)) 100.0)
         ((<= v (ix voltage-curve (- n 1))) 0.0)
-        (true
-            (looprange i 1 (- n 1)
-                (if (and (>= v (ix voltage-curve i)) (<= v (ix voltage-curve (- i 1))))
-                    (break (let ((v1 (ix voltage-curve (- i 1)))
-                    (v2 (ix voltage-curve i))
-                    (s1 (ix socs (- i 1)))
-                    (s2 (ix socs i)))
-                    (+ s1 (* (/ (- v v1) (- v2 v1)) (- s2 s1)))))
-                )
-            )
-         )
-     )
+        (t {
+            (var result 0.0)
+            ; looprange excludes its upper bound: use n to include the final
+            ; 10%-to-0% interval. Return a number even if no interval matches.
+            (looprange i 1 n {
+                (if (and (>= v (ix voltage-curve i)) (<= v (ix voltage-curve (- i 1)))) {
+                    (var v1 (ix voltage-curve (- i 1)))
+                    (var v2 (ix voltage-curve i))
+                    (var s1 (ix socs (- i 1)))
+                    (var s2 (ix socs i))
+                    (setq result (+ s1 (* (/ (- v v1) (- v2 v1)) (- s2 s1))))
+                    (break)
+                })
+            })
+            result
+        })
+    )
 })
 
 (defun get-var (i) i)

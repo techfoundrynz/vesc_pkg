@@ -537,10 +537,12 @@ Item {
             ledStatusPin.value = mCustomConf.getParamInt("led_status_pin")
             ledStatusNum.value = mCustomConf.getParamInt("led_status_num")
             ledStatusType.currentIndex = mCustomConf.getParamEnum("led_status_type")
+            ledStatusWhiteOutput.currentIndex = mCustomConf.getParamEnum("led_status_white_output")
             ledStatusReversed.checked = mCustomConf.getParamBool("led_status_reversed")
             ledFrontPin.value = mCustomConf.getParamInt("led_front_pin")
             ledFrontNum.value = mCustomConf.getParamInt("led_front_num")
             ledFrontType.currentIndex = mCustomConf.getParamEnum("led_front_type")
+            ledFrontWhiteOutput.currentIndex = mCustomConf.getParamEnum("led_front_white_output")
             ledFrontReversed.checked = mCustomConf.getParamBool("led_front_reversed")
             var frontTiming = mCustomConf.getParamEnum("led_front_timing")
             if (frontTiming > 0) {
@@ -549,6 +551,7 @@ Item {
             ledRearPin.value = mCustomConf.getParamInt("led_rear_pin")
             ledRearNum.value = mCustomConf.getParamInt("led_rear_num")
             ledRearType.currentIndex = mCustomConf.getParamEnum("led_rear_type")
+            ledRearWhiteOutput.currentIndex = mCustomConf.getParamEnum("led_rear_white_output")
             ledRearReversed.checked = mCustomConf.getParamBool("led_rear_reversed")
             var rearTiming = mCustomConf.getParamEnum("led_rear_timing")
             if (rearTiming > 0) {
@@ -559,6 +562,7 @@ Item {
             ledFootpadPin.value = mCustomConf.getParamInt("led_footpad_pin")
             ledFootpadNum.value = mCustomConf.getParamInt("led_footpad_num")
             ledFootpadType.currentIndex = mCustomConf.getParamEnum("led_footpad_type")
+            ledFootpadWhiteOutput.currentIndex = mCustomConf.getParamEnum("led_footpad_white_output")
             ledFootpadReversed.checked = mCustomConf.getParamBool("led_footpad_reversed")
             var footpadTiming = mCustomConf.getParamEnum("led_footpad_timing")
             ledFootpadStripType.currentIndex = footpadTiming > 0 ? 1 : 0
@@ -2867,6 +2871,23 @@ Item {
                                         }
                                     }
 
+                                    ColumnLayout {
+                                        visible: ledStatusStripType.currentValue > 0 && ledStatusType.currentIndex >= 2
+                                        spacing: cardStyle.labelSpacing
+                                        Layout.fillWidth: true
+                                        Text {
+                                            color: fieldLabelStyle.color
+                                            font.pixelSize: fieldLabelStyle.pixelSize
+                                            font.bold: fieldLabelStyle.bold
+                                            text: "White Output"
+                                        }
+                                        ComboBox {
+                                            id: ledStatusWhiteOutput
+                                            Layout.fillWidth: true
+                                            model: ["RGB + W", "W only", "RGB only"]
+                                        }
+                                    }
+
                                     CheckBox {
                                         id: ledStatusReversed
                                         text: "Status Reversed"
@@ -3159,6 +3180,23 @@ Item {
                                             }
                                             property int value: 0
                                         }
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    visible: ledFrontStripType.currentValue > 0 && ledFrontType.currentIndex >= 2
+                                    spacing: cardStyle.labelSpacing
+                                    Layout.fillWidth: true
+                                    Text {
+                                        color: fieldLabelStyle.color
+                                        font.pixelSize: fieldLabelStyle.pixelSize
+                                        font.bold: fieldLabelStyle.bold
+                                        text: "White Output"
+                                    }
+                                    ComboBox {
+                                        id: ledFrontWhiteOutput
+                                        Layout.fillWidth: true
+                                        model: ["RGB + W", "W only", "RGB only"]
                                     }
                                 }
 
@@ -3465,6 +3503,23 @@ Item {
                                 }
 
                                 ColumnLayout {
+                                    visible: ledRearStripType.currentValue > 0 && ledRearType.currentIndex >= 2
+                                    spacing: cardStyle.labelSpacing
+                                    Layout.fillWidth: true
+                                    Text {
+                                        color: fieldLabelStyle.color
+                                        font.pixelSize: fieldLabelStyle.pixelSize
+                                        font.bold: fieldLabelStyle.bold
+                                        text: "White Output"
+                                    }
+                                    ComboBox {
+                                        id: ledRearWhiteOutput
+                                        Layout.fillWidth: true
+                                        model: ["RGB + W", "W only", "RGB only"]
+                                    }
+                                }
+
+                                ColumnLayout {
                                     id: ledRearReversedLayout
                                     visible: ledRearStripType.currentValue > 0
                                     spacing: 10
@@ -3669,6 +3724,23 @@ Item {
                                             }
                                             property int value: 0
                                         }
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    visible: ledFootpadStripType.currentValue > 0 && ledFootpadType.currentIndex >= 2
+                                    spacing: cardStyle.labelSpacing
+                                    Layout.fillWidth: true
+                                    Text {
+                                        color: fieldLabelStyle.color
+                                        font.pixelSize: fieldLabelStyle.pixelSize
+                                        font.bold: fieldLabelStyle.bold
+                                        text: "White Output"
+                                    }
+                                    ComboBox {
+                                        id: ledFootpadWhiteOutput
+                                        Layout.fillWidth: true
+                                        model: ["RGB + W", "W only", "RGB only"]
                                     }
                                 }
 
@@ -5117,15 +5189,18 @@ Item {
         mCustomConf.updateParamInt("led_status_pin", ledStatusPin.value)
         mCustomConf.updateParamInt("led_status_num", ledStatusNum.value)
         mCustomConf.updateParamEnum("led_status_type", ledStatusType.currentIndex)
+        mCustomConf.updateParamEnum("led_status_white_output", ledStatusWhiteOutput.currentIndex)
         mCustomConf.updateParamBool("led_status_reversed", ledStatusReversed.checked)
         mCustomConf.updateParamInt("led_front_pin", ledFrontPin.value)
         mCustomConf.updateParamInt("led_front_num", ledFrontNum.value)
         mCustomConf.updateParamEnum("led_front_type", ledFrontType.currentIndex)
+        mCustomConf.updateParamEnum("led_front_white_output", ledFrontWhiteOutput.currentIndex)
         mCustomConf.updateParamBool("led_front_reversed", ledFrontReversed.checked)
         mCustomConf.updateParamEnum("led_front_timing", ledFrontStripType.currentIndex > 0 ? ledFrontTiming.currentIndex + 1 : 0)
         mCustomConf.updateParamInt("led_rear_pin", ledRearPin.value)
         mCustomConf.updateParamInt("led_rear_num", ledRearNum.value)
         mCustomConf.updateParamEnum("led_rear_type", ledRearType.currentIndex)
+        mCustomConf.updateParamEnum("led_rear_white_output", ledRearWhiteOutput.currentIndex)
         mCustomConf.updateParamBool("led_rear_reversed", ledRearReversed.checked)
         mCustomConf.updateParamEnum("led_rear_timing", ledRearStripType.currentIndex > 0 ? ledRearTiming.currentIndex + 1 : 0)
         mCustomConf.updateParamInt("led_button_pin", ledButtonPin.value)
@@ -5133,6 +5208,7 @@ Item {
         mCustomConf.updateParamInt("led_footpad_pin", ledFootpadPin.value)
         mCustomConf.updateParamInt("led_footpad_num", ledFootpadNum.value)
         mCustomConf.updateParamEnum("led_footpad_type", ledFootpadType.currentIndex)
+        mCustomConf.updateParamEnum("led_footpad_white_output", ledFootpadWhiteOutput.currentIndex)
         mCustomConf.updateParamBool("led_footpad_reversed", ledFootpadReversed.checked)
         mCustomConf.updateParamEnum("led_footpad_timing", ledFootpadStripType.currentIndex > 0 ? ledFootpadTiming.currentIndex + 1 : 0)
         mCustomConf.updateParamInt("bms_rs485_di_pin", bmsRs485DIPin.value)

@@ -30,7 +30,8 @@ appearance cache (`seg-cache`) and only calls into the lib when something
 actually changed. A steady state costs zero extension calls.
 
 **Render settings the package uses:** 60 fps requested (`ext-esp_led-fps 60`,
-which the lib rounds to a 16 ms frame), master brightness left at 255, and the
+which the lib rounds to a 16 ms frame), unchanged-frame refresh left at the
+library default (2000 ms), master brightness left at 255, and the
 lib's default fade of 15/32 — about 47% of the remaining gap closed per 33 ms,
 so a brightness change settles in roughly 0.2 s.
 
@@ -353,6 +354,33 @@ old value and the lights would come back on by themselves.
 
 ## 9. Brightness
 
+### White output on RGBW strips
+
+Front, rear, status and footpad each have a **White Output** setting. The QML
+page shows it only when that strip is enabled and its colour order includes W
+(GRBW, RGBW or WRGB), including when a named hardware preset selects the type.
+
+| Setting | Deliberate white output |
+|---|---|
+| RGB + W (default) | all four channels, preserving existing behaviour |
+| W only | dedicated white channel only |
+| RGB only | white mixed from RGB, with W off |
+
+This applies to solid white, white strobes, directional rave headlights and
+embedded highbeams. Each physical strip keeps its own preference when direction
+reverses. Coloured effects and palettes are unchanged; this is not automatic
+white extraction. RGB strips always use RGB white, even if a W-only preference
+was saved before changing the strip type. The button keeps its existing output.
+
+When the config layout changes, the device falls back to defaults. Before
+upgrading, export the Float Accessories custom configuration to XML in VESC
+Tool. After upgrading, read the new default configuration, load the old XML,
+then write it to the device. XML import restores matching names and leaves
+missing fields at their currently loaded values, so the new White Output
+settings remain at RGB + W.
+
+### Brightness levels
+
 Four settings, all fractions from 0 to 1, and all capped by **Max Brightness**:
 
 | Setting | Applies to |
@@ -369,6 +397,13 @@ strips up at boot does not flash them at full brightness first.
 ---
 
 ## 10. Timing, failure handling and diagnostics
+
+**Package builds** — `make` runs `compact_package.py` after VESC Tool creates
+the package. It removes comments and excess source whitespace while retaining
+import statements, string contents and all native binaries. The source/import
+payload and saved Lisp image share flash, so this leaves more room for startup
+image saving. When building directly with VESC Tool, also run
+`python compact_package.py float_accessories.vescpkg` before installing.
 
 **Loop rate** — **LED Loop Rate** (default 20 Hz, range 1–100). This paces the
 state machine only; effect animation runs in the lib at its own frame rate, so

@@ -52,12 +52,13 @@ ui.qml: ui.qml.in version README-gen.md gen_ui.py
 lib/version-gen.lisp: version gen_version.py
 	$(PYTHON) gen_version.py
 
-float_accessories.vescpkg: esp_led_libs fa_cfg_libs pkgdesc.qml README-gen.md ui.qml lib/version-gen.lisp
+float_accessories.vescpkg: esp_led_libs fa_cfg_libs pkgdesc.qml README-gen.md ui.qml lib/version-gen.lisp compact_package.py
 	$(VESC_TOOL) --buildPkgFromDesc pkgdesc.qml \
 		--testPkgDesc 'custom:Devkit C3' \
 		--testPkgDesc 'custom:Avaspark RGB V3' \
 		--testPkgDesc 'vesc bms:VESC BMS' \
 		--testPkgDesc 'vesc:test'
+	$(PYTHON) compact_package.py $@
 
 clean:
 	rm -f float_accessories.vescpkg

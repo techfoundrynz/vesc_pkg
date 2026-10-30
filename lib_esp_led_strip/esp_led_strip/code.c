@@ -66,7 +66,7 @@ HEADER
 
 // Quiet time before a keepalive retransmit, so a pixel corrupted by line
 // noise heals. Timed, not counted in frames, so it holds at any frame rate.
-#define esp_led_REFRESH_MS 2000
+#define esp_led_REFRESH_MS_DEF 2000
 
 // Effects. gen_defs.py mirrors these ids into esp_led_defs.lisp; a stale
 // mirror selects the wrong effect silently.
@@ -226,6 +226,7 @@ typedef struct {
 	uint8_t fade;        // gap fraction closed per esp_led_PHASE_REF_MS in
 	                     // 32nds, 0 = instant
 	uint16_t frame_ms;   // target frame time, set by ext-esp_led-fps
+	uint32_t refresh_ms; // unchanged-frame refresh interval, 0 = every frame
 
 	uint16_t buf_len;    // pixels the work buffer holds
 	uint32_t *work;      // packed 0xWWRRGGBB, buf_len entries
@@ -744,6 +745,7 @@ static void render_thd(void *arg) {
 			s->phase_rem = (uint16_t)(inc % div);
 		}
 		uint8_t master_cur = st->master_cur;
+		uint32_t refresh_ms = st->refresh_ms;
 		VESC_IF->mutex_unlock(st->lock);
 
 		for (int gi = 0; gi < st->group_count; gi++) {
@@ -776,13 +778,12 @@ static void render_thd(void *arg) {
 			// the comparison stays against the wire state.
 			bool send = false;
 			if (any) {
-				if (g->quiet_ms >= esp_led_REFRESH_MS
+				g->quiet_ms += elapsed;
+				if (g->quiet_ms >= refresh_ms
 					|| memcmp(g->txbuf[0], g->txbuf[1], (size_t)tx_bytes) != 0) {
 					send = true;
 					g->quiet_ms = 0;
 					g->cur ^= 1;
-				} else {
-					g->quiet_ms += elapsed;
 				}
 			}
 
@@ -991,7 +992,7 @@ static lbm_value ext_init(lbm_value *args, lbm_uint argn) {
 			st->group[s->group].cur = 0;
 			// Force the first frame out even if it is all-black: both buffers
 			// start zeroed and would compare equal.
-			st->group[s->group].quiet_ms = esp_led_REFRESH_MS;
+			st->group[s->group].quiet_ms = st->refresh_ms;
 		} else {
 			if (st->group[s->group].colors != colors) {
 				VESC_IF->lbm_set_error_reason(
@@ -1467,6 +1468,18 @@ static lbm_value ext_fps(lbm_value *args, lbm_uint argn) {
 	return VESC_IF->lbm_enc_sym_true;
 }
 
+// Unchanged-frame refresh interval in milliseconds. 0 transmits every frame.
+static lbm_value ext_refresh(lbm_value *args, lbm_uint argn) {
+	esp_led_t *st = state();
+	if (!check_num_args(args, argn, 1)) return VESC_IF->lbm_enc_sym_terror;
+	int ms = VESC_IF->lbm_dec_as_i32(args[0]);
+	if (ms < 0 || ms > 60000) return VESC_IF->lbm_enc_sym_terror;
+	VESC_IF->mutex_lock(st->lock);
+	st->refresh_ms = (uint32_t)ms;
+	VESC_IF->mutex_unlock(st->lock);
+	return VESC_IF->lbm_enc_sym_true;
+}
+
 // Brightness easing for master and segments: 32nds of the remaining gap closed
 // per 33 ms of real time (0 = instant, 32 = full).
 static lbm_value ext_fade(lbm_value *args, lbm_uint argn) {
@@ -1527,6 +1540,7 @@ static lbm_value ext_seg_auto_white(lbm_value *a, lbm_uint n) { return set_one(a
 	X("ext-esp_led-bri", ext_bri) \
 	X("ext-esp_led-fade", ext_fade) \
 	X("ext-esp_led-fps", ext_fps) \
+	X("ext-esp_led-refresh", ext_refresh) \
 	X("ext-esp_led-seg-auto-white", ext_seg_auto_white)
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3
@@ -1566,6 +1580,7 @@ INIT_FUN(lib_info *info) {
 	st->master_cur = 255;
 	st->fade = esp_led_FADE_DEF;
 	st->frame_ms = esp_led_FRAME_MS_DEF;
+	st->refresh_ms = esp_led_REFRESH_MS_DEF;
 	st->lock = VESC_IF->mutex_create();
 	if (!st->lock) {
 		VESC_IF->free(st);

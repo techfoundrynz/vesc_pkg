@@ -72,8 +72,8 @@ static void read_cfg_from_eeprom(fa_data *d) {
 	bool read_ok = VESC_IF->read_eeprom_var(
 		(eeprom_var *)buffer, EEPROM_BASE_IDX, CONFIG_WORDS);
 
-	// The signature check rejects stale data from older layouts, which
-	// replaces the magic/crc scheme the package used to implement itself.
+	// Stored configs from a different layout must be restored from an XML
+	// backup in VESC Tool, which matches fields by name.
 	if (!read_ok || !confparser_deserialize_faconfig((uint8_t *)buffer, &d->cfg)) {
 		VESC_IF->printf("facfg: no stored config, using defaults");
 		confparser_set_defaults_faconfig(&d->cfg);
