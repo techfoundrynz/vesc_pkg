@@ -1,33 +1,25 @@
-;const
-(def key-crc '(3141361152u32))  ;AES-128 key. Offset in 6109: 0x12009
-(def counter-crc '(4092889840u32)) ;IV for counter. Offset in 6109: 0x12019
-
-(def key (bufcreate 16))
-(def counter (bufcreate 16))
-(def magic [0xff 0x55 0x00])
-
 @const-start
 
-(def bms-user-cmd -1)
-(def bms-loop-delay)
-(def bms-rs485-di-pin)
-(def bms-rs485-ro-pin)
-(def bms-rs485-dere-pin)
-(def bms-wakeup-pin)
-(def bms-use-crypto)
-(def bms-override-soc 0)
-(def bms-type 0)
-(def bms-rs485-chip 0)
-(def bms-charge-only 0)
-
-;vars
-(def cell-count-uninit t)
-(def factory -1);TODO Check if bms is in factory mode somehow and init if is. Probably have a timer at boot looking for packets to determine valid state when connected.
-(def is-charging -1)
-(def is-current-over-limit -1)
-(def is-battery-empty -1)
-(def is-battery-temp-out-of-range -1)
-(def is-battery-overcharged -1)
-(def serial -1)
+; Shared BMS state and backend IDs. Protocol-specific globals live in adapters.
+(def BMS-BACKEND-NONE 0)
+(def BMS-BACKEND-OW 1)
+(def BMS-BACKEND-SSBMS 2)
+(def BMS-CAP-CHARGE 1)
+(def BMS-CAP-FACTORY 2)
+(def BMS-CAP-PAIRING 4)
+(def bms-context-id -1)
+(def bms-last-activity-time 0)
+(def bms-valid nil)
+(def bms-freshness-seconds 1.0)
+; Normalized UI flags: temperature 0..3, empty 0x04, overcharged 0x08,
+; charging reported 0x20, SoC calculation 0x40; -1 means not received yet.
+(def bms-status -1)
+(def bms-battery-type -1)
+(def bms-battery-cycles -1)
+(def bms-charge-state 0)
+(def bms-can-id -1)
+(def bms-is-charging nil)
+(def bms-charger-just-plugged nil)
+(def bms-charger-plug-in-time 0)
 
 @const-end

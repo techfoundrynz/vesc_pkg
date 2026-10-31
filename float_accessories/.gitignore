@@ -25,3 +25,9 @@ fa_cfg/conf_lookup.h
 README-gen.md
 ui.qml
 lib/version-gen.lisp
+
+# Objects shared by the FA native image.
+native/**/*.o
+native/**/*.d
+
+fa_cfg/pin_caps.h

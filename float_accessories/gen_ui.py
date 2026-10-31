@@ -17,6 +17,7 @@ sed would need escaping for its delimiter, backslashes and '&'.
 """
 
 import pathlib
+import json
 import sys
 
 HERE = pathlib.Path(__file__).parent
@@ -25,7 +26,7 @@ ABOUT = HERE / "README-gen.md"
 VERSION = HERE / "version"
 OUT = HERE / "ui.qml"
 
-PLACEHOLDERS = ("{{VERSION}}", "{{ABOUT_MD}}")
+PLACEHOLDERS = ("{{VERSION}}", "{{ABOUT_MD}}", "{{GPIO_TARGETS}}")
 
 
 def qml_string(text):
@@ -44,7 +45,10 @@ def main():
         if not path.exists():
             sys.exit(f"gen_ui.py: missing {path.name}")
 
+    sys.path.insert(0, str(HERE / "conf"))
+    from pin_caps import TARGETS
     out = TEMPLATE.read_text(encoding="utf-8")
+    out = out.replace("{{GPIO_TARGETS}}", json.dumps(TARGETS, separators=(",", ":")))
     out = out.replace("{{VERSION}}", VERSION.read_text(encoding="utf-8").strip())
     out = out.replace("{{ABOUT_MD}}", qml_string(ABOUT.read_text(encoding="utf-8")))
 

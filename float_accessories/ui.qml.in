@@ -244,8 +244,58 @@ Item {
     property Commands mCommands: VescIf.commands()
     property int floatAccessoriesMagic: 102
     property bool acceptTOS: false
+    readonly property bool owBmsEnabled: bmsEnabled.checked && bmsBackend.currentIndex === 1
+    readonly property bool ssbmsSelected: bmsEnabled.checked && bmsBackend.currentIndex === 2
     property int lastStatusTime: 0
     property bool statusTimeout: true
+    property string gpioTarget: ""
+    readonly property var gpioTargets: JSON.parse('{{GPIO_TARGETS}}')
+    readonly property string pinConfigError: readConfig ? pinConfigurationError() : ""
+
+    function gpioPinValid(pin) {
+        var caps = gpioTargets[gpioTarget]
+        return pin === -1 || (caps && isFinite(pin) && pin === Math.floor(pin)
+            && pin >= 0 && pin <= caps.max
+            && (caps.gap.length === 0 || pin < caps.gap[0] || pin > caps.gap[1]))
+    }
+
+    function gpioRangeDescription() {
+        var caps = gpioTargets[gpioTarget]
+        if (!caps) return "Waiting for device GPIO capabilities."
+        return caps.gap.length === 0 ? "0–" + caps.max
+            : "0–" + (caps.gap[0] - 1) + ", " + (caps.gap[1] + 1) + "–" + caps.max
+    }
+
+    function pinConfigurationError() {
+        if (!gpioTargets[gpioTarget]) return "Waiting for device GPIO capabilities."
+        var pins = [
+            ["Front LED", ledFrontPin.value],
+            ["Rear LED", ledRearPin.value],
+            ["Status LED", ledStatusPin.value],
+            ["Footpad LED", ledFootpadPin.value],
+            ["Button LED", ledButtonPin.value],
+            ["Front highbeam", ledFrontHighbeamPin.value],
+            ["Rear highbeam", ledRearHighbeamPin.value],
+            ["OW BMS DI", bmsRs485DIPin.value],
+            ["OW BMS RO", bmsRs485ROPin.value],
+            ["OW BMS DE/RE", bmsRs485DEREPin.value],
+            ["BMS wakeup", bmsWakeupPin.value],
+            ["SSBMS RX", ssbmsRxPin.value],
+            ["SSBMS TX", ssbmsTxPin.value],
+            ["Humidity SDA", humiditySdaPin.value],
+            ["Humidity SCL", humiditySlcPin.value],
+            ["GNSS RX", gnssRxPin.value],
+            ["GNSS TX", gnssTxPin.value]
+        ]
+        for (var i = 0; i < pins.length; i++) {
+            if (!gpioPinValid(pins[i][1])) {
+                return pins[i][0] + ": GPIO " + pins[i][1] + " is invalid for "
+                    + gpioTarget + ". Use " + gpioRangeDescription() + " or -1 (unassigned)."
+            }
+        }
+        return ""
+    }
+
     property bool readConfig: false
     property bool wasConnected: false
     property int debugMask: 0
@@ -306,10 +356,10 @@ Item {
         readonly property int gnssSeverity: (!gnssEnabled.checked || statusTimeout) ? -1
             : (gnssFix ? 0 : (gnssAge <= 10 ? 1 : 2))
 
-        readonly property int bmsSeverity: (!bmsEnabled.checked || statusTimeout) ? -1
+        readonly property int bmsSeverity: ((!bmsEnabled.checked || bmsBackend.currentIndex === 0) || statusTimeout) ? -1
             : (bmsConnected ? 0 : 2)
 
-        readonly property int bmsHumSeverity: (!bmsEnabled.checked || !humidityEnabled.checked
+        readonly property int bmsHumSeverity: (!owBmsEnabled || !humidityEnabled.checked
             || statusTimeout || bmsHum <= 0) ? -1
             : (bmsHum < 65 ? 0 : (bmsHum < 80 ? 1 : 2))
 
@@ -401,6 +451,7 @@ Item {
     // track don't stay frozen at their last values until reconnect.
     onStatusTimeoutChanged: {
         if (statusTimeout) {
+            gpioTarget = ""
             pubmoteInputConnected = false
             pubmoteInputJsy = 0
             pubmoteInputJsx = 0
@@ -522,6 +573,9 @@ Item {
             acceptTOS = (mCustomConf.getParamBool("accept_tos")) ? true : false
             ledEnabled.checked = mCustomConf.getParamBool("led_enabled")
             bmsEnabled.checked = mCustomConf.getParamBool("bms_enabled")
+            bmsBackend.currentIndex = mCustomConf.getParamEnum("bms_backend")
+            ssbmsRxPin.value = mCustomConf.getParamInt("ssbms_rx_pin")
+            ssbmsTxPin.value = mCustomConf.getParamInt("ssbms_tx_pin")
             pubmoteEnabled.checked = mCustomConf.getParamBool("pubmote_enabled")
             ledOn.checked = mCustomConf.getParamBool("led_on")
             ledHighbeamOn.checked = mCustomConf.getParamBool("led_highbeam_on")
@@ -1381,7 +1435,7 @@ Item {
                         var keyList = hexStringToLispList(keyHex);
                         var counterList = hexStringToLispList(counterHex);
 
-                        var sendKeysString = "(send-keys " + keyList + " " + counterList + ")";
+                        var sendKeysString = "(bms-pair " + keyList + " " + counterList + ")";
                         console.log("Sending: " + sendKeysString);
                         sendCode(String.fromCharCode(102) + String.fromCharCode(1) + sendKeysString);
 
@@ -1544,7 +1598,7 @@ Item {
         // Status used to live on the Control tab and gave it its name when no
         // feature was on. It is in the header pill now, so with every feature
         // off that tab holds nothing at all and hides itself.
-        property bool hasControlContent: ledEnabled.checked || bmsEnabled.checked || logEnabled.checked
+        property bool hasControlContent: ledEnabled.checked || owBmsEnabled || logEnabled.checked
         property int enabledFeatureCount: ledEnabled.checked + pubmoteEnabled.checked + bmsEnabled.checked + logEnabled.checked + gnssEnabled.checked
 
         // Control (0) and Config (1) each hide themselves when they have
@@ -1716,7 +1770,7 @@ Item {
                             wrapMode: Text.WordWrap
                             property int effectiveTime: Math.max(integrationLastStatusTime, lastStatusTime)
                             color: statusSummary.severityColor(statusSummary.integrationSeverity)
-                            text: "Integration: " + (statusTimeout ? "Unknown"
+                            text: (integrationSelector.currentText || qsTr("Integration")) + ": " + (statusTimeout ? "Unknown"
                                 : integrationConnectionState === 2 ? "Connected"
                                 : (integrationConnectionState === 1 ? "Connecting" : "Disconnected")
                                     + " (" + effectiveTime + "s)")
@@ -1748,7 +1802,9 @@ Item {
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
                             color: statusSummary.severityColor(statusSummary.bmsSeverity)
-                            text: statusTimeout ? "BMS: Unknown" : "BMS: " + (bmsConnected ? "Connected" : "Not Connected")
+                            text: bmsBackend.currentIndex === 0 ? "BMS: No backend selected"
+                                : (ssbmsSelected ? "SSBMS UART: " : "OW BMS: ")
+                                    + (statusTimeout ? "Unknown" : (bmsConnected ? "Connected" : "Not Connected"))
                             visible: bmsEnabled.checked
                         }
 
@@ -1758,7 +1814,7 @@ Item {
                             wrapMode: Text.WordWrap
                             color: statusSummary.severityColor(statusSummary.bmsHumSeverity)
                             text: "BMS Humidity: " + ((!statusTimeout && bmsHum > 0) ? bmsHum + "%" : "Unknown")
-                            visible: bmsEnabled.checked && humidityEnabled.checked
+                            visible: owBmsEnabled && humidityEnabled.checked
                         }
 
                         Text {
@@ -1767,7 +1823,7 @@ Item {
                             wrapMode: Text.WordWrap
                             color: (!statusTimeout && bmsHum > 0) ? statusSummary.okColor : statusSummary.idleColor
                             text: "BMS Temp: " + ((!statusTimeout && bmsHum > 0) ? Math.floor((bmsHumTemp * 1.8 + 32) * 100)/100 +"F " + bmsHumTemp + "C" : "Unknown")
-                            visible: bmsEnabled.checked
+                            visible: owBmsEnabled
                         }
 
                         Text {
@@ -2370,7 +2426,7 @@ Item {
                     GroupBox {
                         title: "BMS Control"
                         Layout.fillWidth: true
-                        visible: bmsEnabled.checked && bmsType.currentIndex > 1
+                        visible: owBmsEnabled && bmsType.currentIndex > 1
                         background: Loader { sourceComponent: cardBg }
                         label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "BMS Control" }
                         topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
@@ -2394,7 +2450,7 @@ Item {
                     GroupBox {
                         title: "BMS Info"
                         Layout.fillWidth: true
-                        visible: bmsEnabled.checked && bmsConnected === 1
+                        visible: (owBmsEnabled || ssbmsSelected) && bmsConnected === 1
                         background: Loader { sourceComponent: cardBg }
                         label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "BMS Info" }
                         topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
@@ -2407,19 +2463,19 @@ Item {
                                 id: bmsError
                                 Layout.fillWidth: true
                                 color: Utility.getAppHexColor("lightText")
-                                text: statusTimeout ? "BMS Error: Unknown" : "BMS Error: " + bmsStatusTemp + "\nCharging: " + ((bmsStatusTemp & 0x20)>0) + "\nEmpty: " + ((bmsStatusTemp & 0x04)>0) + "\nTemp: " + ((bmsStatusTemp & 0x03)>0) + "\nOvercharge: " + ((bmsStatusTemp & 0x08)>0) + "\nSoC Calibration: " + ((bmsStatusTemp & 0x40)>0)
+                                text: (statusTimeout || bmsStatusTemp < 0) ? "BMS Status: Unknown" : "BMS Error: " + bmsStatusTemp + "\nCharging: " + ((bmsStatusTemp & 0x20)>0) + "\nEmpty: " + ((bmsStatusTemp & 0x04)>0) + "\nTemp: " + ((bmsStatusTemp & 0x03)>0) + "\nOvercharge: " + ((bmsStatusTemp & 0x08)>0) + "\nSoC Calibration: " + ((bmsStatusTemp & 0x40)>0)
                             }
                             Text {
                                 id: bmsBatteryType
                                 Layout.fillWidth: true
                                 color: Utility.getAppHexColor("lightText")
-                                text: statusTimeout ? "Battery Type: Unknown" : "Battery Type: " + bmsBatteryTypeVal
+                                text: (statusTimeout || bmsBatteryTypeVal < 0) ? "Battery Type: Unknown" : "Battery Type: " + bmsBatteryTypeVal
                             }
                             Text {
                                 id: bmsBatteryCycles
                                 Layout.fillWidth: true
                                 color: Utility.getAppHexColor("lightText")
-                                text: statusTimeout ? "Battery Cycles: Unknown" : "Battery Cycles: " + bmsBatteryCyclesVal
+                                text: (statusTimeout || bmsBatteryCyclesVal < 0) ? "Battery Cycles: Unknown" : "Battery Cycles: " + bmsBatteryCyclesVal
                             }
                         }
                     }
@@ -4029,10 +4085,86 @@ Item {
                         spacing: 20
                         visible: bmsEnabled.checked && tabBar2.currentIndex === 2
                         GroupBox {
-                            title: "BMS Config"
+                            title: "BMS Backend"
                             Layout.fillWidth: true
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "BMS Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "BMS Backend" }
+                            topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
+                            ColumnLayout {
+                                anchors.fill: parent
+                                spacing: 10
+                                ComboBox {
+                                    id: bmsBackend
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    model: ["None", "OW", "SSBMS UART"]
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: fieldLabelStyle.color
+                                    visible: bmsBackend.currentIndex === 0
+                                    text: "Select a backend to use BMS communications. None keeps BMS communications off."
+                                }
+                            }
+                        }
+                        GroupBox {
+                            title: "SSBMS UART"
+                            Layout.fillWidth: true
+                            visible: ssbmsSelected
+                            background: Loader { sourceComponent: cardBg }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "SSBMS UART" }
+                            topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
+                            ColumnLayout {
+                                anchors.fill: parent
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: fieldLabelStyle.color
+                                    text: "Read-only UART at 115200 baud (8N1), using UART 1. Set both pins; -1 means unassigned. Cell voltages, temperatures and charging status are polled automatically. SoC is estimated from the lowest cell using Cell Type in State of Charge Reporting."
+                                }
+                                ColumnLayout {
+                                    spacing: cardStyle.labelSpacing
+                                    Text {
+                                        color: fieldLabelStyle.color
+                                        font.pixelSize: fieldLabelStyle.pixelSize
+                                        font.bold: fieldLabelStyle.bold
+                                        text: "ESP RX Pin (SSBMS TX)"
+                                    }
+                                    SpinBox {
+                                        id: ssbmsRxPin
+                                        from: -1
+                                        to: 100
+                                        value: -1
+                                        editable: true
+                                    }
+
+                                }
+                                ColumnLayout {
+                                    spacing: cardStyle.labelSpacing
+                                    Text {
+                                        color: fieldLabelStyle.color
+                                        font.pixelSize: fieldLabelStyle.pixelSize
+                                        font.bold: fieldLabelStyle.bold
+                                        text: "ESP TX Pin (SSBMS RX)"
+                                    }
+                                    SpinBox {
+                                        id: ssbmsTxPin
+                                        from: -1
+                                        to: 100
+                                        value: -1
+                                        editable: true
+                                    }
+
+                                }
+                            }
+                        }
+                        GroupBox {
+                            title: "OW BMS Comms"
+                            visible: owBmsEnabled
+                            Layout.fillWidth: true
+                            background: Loader { sourceComponent: cardBg }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "OW BMS Comms" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
                             ColumnLayout {
                                 anchors.fill: parent
@@ -4662,7 +4794,7 @@ Item {
 
                             ColumnLayout {
                                 spacing: cardStyle.labelSpacing
-                                visible: voltageCurveSoc.checked
+                                visible: voltageCurveSoc.checked || ssbmsSelected
                                 Layout.fillWidth: true
                                 Text {
                                     color: fieldLabelStyle.color
@@ -4892,6 +5024,15 @@ Item {
 
         }
 
+        Text {
+            Layout.fillWidth: true
+            visible: (tabBar.currentIndex === 1 || tabBar.currentIndex === 2)
+                && readConfig && !statusTimeout && pinConfigError !== ""
+            wrapMode: Text.WordWrap
+            color: statusSummary.severityColor(2)
+            text: pinConfigError
+        }
+
         // Save and Restore Buttons
         RowLayout {
             Layout.fillWidth: true
@@ -4904,11 +5045,16 @@ Item {
                 text: statusTimeout ? "Not connected" : "Save Config"
                 enabled: readConfig && !statusTimeout
                 onClicked: {
-                    if (bmsEnabled.checked && !acceptTOS) {
+                    if (owBmsEnabled && !acceptTOS) {
                         termsPopup.visible = true
                     }
 
                     if (!requireCustomConf()) {
+                        return
+                    }
+
+                    if (pinConfigError !== "") {
+                        VescIf.emitMessageDialog("Invalid GPIO", pinConfigError, false, false)
                         return
                     }
 
@@ -5143,7 +5289,7 @@ Item {
     }
 
     function bmsFactoryInit(str) {
-        sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(bms-trigger-factory-init)")
+        sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(bms-request-factory-init)")
     }
 
     function makeControlArgStr() {
@@ -5187,6 +5333,9 @@ Item {
     function writeConfigToParams() {
         mCustomConf.updateParamBool("led_enabled", ledEnabled.checked)
         mCustomConf.updateParamBool("bms_enabled", bmsEnabled.checked)
+        mCustomConf.updateParamEnum("bms_backend", bmsBackend.currentIndex)
+        mCustomConf.updateParamInt("ssbms_rx_pin", ssbmsRxPin.value)
+        mCustomConf.updateParamInt("ssbms_tx_pin", ssbmsTxPin.value)
         mCustomConf.updateParamBool("pubmote_enabled", pubmoteEnabled.checked)
         mCustomConf.updateParamBool("led_on", ledOn.checked)
         mCustomConf.updateParamBool("led_highbeam_on", ledHighbeamOn.checked)
@@ -5522,6 +5671,9 @@ Item {
                     gnssHdop = parseFloat(tokens[15])
                     gnssSpeed = parseFloat(tokens[16])
                 }
+
+                gpioTarget = tokens.length > 17
+                    ? tokens[17].replace(/\0/g, "").trim().toLowerCase() : ""
 
                 // Update status flags
                 lastStatusTime = 0  // Reset the timer when status is received

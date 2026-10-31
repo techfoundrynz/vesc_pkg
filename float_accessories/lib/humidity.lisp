@@ -9,9 +9,15 @@
 (def has-aht20 nil)
 
 (defunret init-humidity () {
+    (var sda (get-config 'humidity-sda-pin))
+    (var scl (get-config 'humidity-slc-pin))
+    (if (or (< sda 0) (< scl 0) (= sda scl)) {
+        (dbg-warn "Humidity: set distinct SDA and SCL pins")
+        (return false)
+    })
     (dbg DBG-HUM (str-merge "hum i2c sda " (str-from-n (get-config 'humidity-sda-pin) "%d")
         " slc " (str-from-n (get-config 'humidity-slc-pin) "%d")))
-    (i2c-start 'rate-400k (get-config 'humidity-sda-pin) (get-config 'humidity-slc-pin))
+    (i2c-start 'rate-400k sda scl)
     (setq has-si7021 (i2c-detect-addr 0x40))
     (setq has-aht20 (i2c-detect-addr 0x38))
 

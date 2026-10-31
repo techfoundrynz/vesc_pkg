@@ -17,7 +17,7 @@ test:
 	LBM_TEST_RUNNER="$(LBM_TEST_RUNNER)" $(PYTHON) -m unittest discover -s tests -v
 
 # Regenerate the config sources from conf/gen_conf.py when it changed.
-conf/settings.xml fa_cfg/datatypes.h fa_cfg/conf_lookup.h &: conf/gen_conf.py
+conf/settings.xml fa_cfg/datatypes.h fa_cfg/conf_lookup.h fa_cfg/pin_caps.h &: conf/gen_conf.py conf/pin_caps.py
 	$(PYTHON) conf/gen_conf.py
 
 conf/confparser.c conf/confparser.h conf/confxml.c conf/confxml.h conf/conf_default.h &: conf/settings.xml
@@ -30,10 +30,10 @@ esp_led_libs:
 
 fa_cfg_libs: conf/confparser.c fa_cfg/datatypes.h
 	for t in $(ESP_TARGETS); do \
-		rm -f fa_cfg/*.o fa_cfg/*.d conf/*.o conf/*.d; \
+		rm -f fa_cfg/*.o fa_cfg/*.d conf/*.o conf/*.d native/*.o native/*.d native/*/*.o native/*/*.d; \
 		$(MAKE) -C fa_cfg ESP_TARGET=$$t || exit 1; \
 	done
-	rm -f fa_cfg/*.o fa_cfg/*.d conf/*.o conf/*.d
+	rm -f fa_cfg/*.o fa_cfg/*.d conf/*.o conf/*.d native/*.o native/*.d native/*/*.o native/*/*.d
 
 # Built from pkgdesc.qml rather than a --buildPkg string, so the package can
 # declare isCompatible and refuse non-Express hardware. --testPkgDesc runs that
@@ -51,7 +51,7 @@ README-gen.md: README.md version
 # The About box is generated from README-gen.md, so it cannot drift from the
 # package store description. gen_ui.py does the substitution (not sed, which
 # would need escaping for arbitrary markdown).
-ui.qml: ui.qml.in version README-gen.md gen_ui.py
+ui.qml: ui.qml.in version README-gen.md gen_ui.py conf/pin_caps.py
 	$(PYTHON) gen_ui.py
 
 # The lisp's package version, from the same `version` file as the About box.

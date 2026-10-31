@@ -9,6 +9,8 @@
 # conf_default from settings.xml (see fa_cfg/Makefile).
 
 import os
+from pathlib import Path
+from pin_caps import emit_header
 
 # (name, longName, kind, default, extra, description)
 # kind: "bool" | ("int", min, max, suffix) | ("float", min, max, step, suffix)
@@ -40,7 +42,7 @@ PARAMS = [
     ("led_enabled", "LED Enabled", (B,), 0,
      "Enable the LED module (needs the ESPLED Strip native lib)."),
     ("bms_enabled", "BMS Enabled", (B,), 0,
-     "Enable the stock OW BMS RS485 bridge."),
+     "Enable the selected BMS backend. None starts no communications."),
     ("pubmote_enabled", "Pubmote Enabled", (B,), 0,
      "Enable the Pubmote ESP-NOW remote."),
     ("log_enabled", "Logging Enabled", (B,), 0,
@@ -101,7 +103,7 @@ PARAMS = [
     # --- LEDs: front strip ----------------------------------------------
     ("led_front_timing", "Front Strip", (E, STRIP_TIMINGS), 0,
      "Front strip: disabled, or the wire timing preset to drive it with."),
-    ("led_front_pin", "Front Pin", (I, -1, 48, ""), 8,
+    ("led_front_pin", "Front Pin", (I, -1, 54, ""), 8,
      "GPIO of the front strip data line."),
     ("led_front_num", "Front LED Count", (I, 0, 512, ""), 11,
      "Number of LEDs on the front strip (highbeam LEDs not included)."),
@@ -112,7 +114,7 @@ PARAMS = [
     ("led_front_highbeam_mode", "Front Highbeam", (E, HIGHBEAM_MODES), 0,
      "Front highbeam hardware: a separate PWM-driven pin, or LEDs embedded"
      " in the strip itself."),
-    ("led_front_highbeam_pin", "Front Highbeam Pin", (I, -1, 48, ""), -1,
+    ("led_front_highbeam_pin", "Front Highbeam Pin", (I, -1, 54, ""), -1,
      "PWM highbeam GPIO for the front (highbeam mode PWM Pin)."),
     ("led_front_highbeam_pos", "Front Highbeam Positions",
      (I, -2147483648, 2147483647, ""), -1,
@@ -131,7 +133,7 @@ PARAMS = [
     # --- LEDs: rear strip -----------------------------------------------
     ("led_rear_timing", "Rear Strip", (E, STRIP_TIMINGS), 0,
      "Rear strip: disabled, or the wire timing preset to drive it with."),
-    ("led_rear_pin", "Rear Pin", (I, -1, 48, ""), 9,
+    ("led_rear_pin", "Rear Pin", (I, -1, 54, ""), 9,
      "GPIO of the rear strip data line."),
     ("led_rear_num", "Rear LED Count", (I, 0, 512, ""), 11,
      "Number of LEDs on the rear strip (highbeam LEDs not included)."),
@@ -142,7 +144,7 @@ PARAMS = [
     ("led_rear_highbeam_mode", "Rear Highbeam", (E, HIGHBEAM_MODES), 0,
      "Rear highbeam hardware: a separate PWM-driven pin, or LEDs embedded"
      " in the strip itself."),
-    ("led_rear_highbeam_pin", "Rear Highbeam Pin", (I, -1, 48, ""), -1,
+    ("led_rear_highbeam_pin", "Rear Highbeam Pin", (I, -1, 54, ""), -1,
      "PWM highbeam GPIO for the rear (highbeam mode PWM Pin)."),
     ("led_rear_highbeam_pos", "Rear Highbeam Positions",
      (I, -2147483648, 2147483647, ""), -1,
@@ -161,7 +163,7 @@ PARAMS = [
     # --- LEDs: status bar -----------------------------------------------
     ("led_status_timing", "Status Strip", (E, STRIP_TIMINGS), 0,
      "Status bar: disabled, or the wire timing preset to drive it with."),
-    ("led_status_pin", "Status Pin", (I, -1, 48, ""), 7,
+    ("led_status_pin", "Status Pin", (I, -1, 54, ""), 7,
      "GPIO of the status bar data line."),
     ("led_status_num", "Status LED Count", (I, 0, 512, ""), 10,
      "Number of LEDs on the status bar."),
@@ -174,7 +176,7 @@ PARAMS = [
     ("led_footpad_timing", "Footpad Strip", (E, STRIP_TIMINGS), 0,
      "Footpad strip: disabled, or the wire timing preset to drive it"
      " with."),
-    ("led_footpad_pin", "Footpad Pin", (I, -1, 48, ""), -1,
+    ("led_footpad_pin", "Footpad Pin", (I, -1, 54, ""), -1,
      "GPIO of the footpad strip data line."),
     ("led_footpad_num", "Footpad LED Count", (I, 0, 512, ""), 0,
      "Number of LEDs on the footpad strip."),
@@ -187,7 +189,7 @@ PARAMS = [
     ("led_button_timing", "Button LED", (E, STRIP_TIMINGS), 0,
      "Single button LED: disabled, or the wire timing preset to drive it"
      " with."),
-    ("led_button_pin", "Button Pin", (I, -1, 48, ""), -1,
+    ("led_button_pin", "Button Pin", (I, -1, 54, ""), -1,
      "GPIO of the button LED data line."),
 
     # --- Pubmote ---------------------------------------------------------
@@ -205,13 +207,13 @@ PARAMS = [
      "BMS variant."),
     ("bms_rs485_chip", "RS485 Chip", (I, 0, 3, ""), 1,
      "RS485 transceiver variant."),
-    ("bms_rs485_di_pin", "RS485 DI Pin", (I, -1, 48, ""), 16,
+    ("bms_rs485_di_pin", "RS485 DI Pin", (I, -1, 54, ""), 16,
      "GPIO wired to the transceiver DI."),
-    ("bms_rs485_ro_pin", "RS485 RO Pin", (I, -1, 48, ""), 8,
+    ("bms_rs485_ro_pin", "RS485 RO Pin", (I, -1, 54, ""), 8,
      "GPIO wired to the transceiver RO."),
-    ("bms_rs485_dere_pin", "RS485 DE/RE Pin", (I, -1, 48, ""), 17,
+    ("bms_rs485_dere_pin", "RS485 DE/RE Pin", (I, -1, 54, ""), 17,
      "GPIO wired to the transceiver DE/RE."),
-    ("bms_wakeup_pin", "BMS Wakeup Pin", (I, -1, 48, ""), -1,
+    ("bms_wakeup_pin", "BMS Wakeup Pin", (I, -1, 54, ""), -1,
      "GPIO that wakes the BMS, -1 if unused."),
     ("bms_override_soc", "Override SOC", (I, 0, 1, ""), 0,
      "Report the locally estimated SOC instead of the BMS one."),
@@ -247,18 +249,18 @@ PARAMS = [
      "Telemetry log sample rate."),
     ("log_append_gnss", "Log GNSS", (B,), 0,
      "Append GNSS position to log samples (needs GNSS enabled)."),
-    ("humidity_sda_pin", "Humidity SDA Pin", (I, -1, 48, ""), -1,
+    ("humidity_sda_pin", "Humidity SDA Pin", (I, -1, 54, ""), -1,
      "I2C SDA GPIO of the humidity sensor."),
-    ("humidity_slc_pin", "Humidity SCL Pin", (I, -1, 48, ""), -1,
+    ("humidity_slc_pin", "Humidity SCL Pin", (I, -1, 54, ""), -1,
      "I2C SCL GPIO of the humidity sensor."),
 
     # --- GNSS -------------------------------------------------------------
     ("gnss_type", "GNSS Type", (E, ["u-blox (UBX)", "NMEA (UART)"]), 0,
      "u-blox modules are driven by the firmware driver; any other NMEA"
      " module is read from a plain UART."),
-    ("gnss_rx_pin", "GNSS RX Pin", (I, -1, 48, ""), -1,
+    ("gnss_rx_pin", "GNSS RX Pin", (I, -1, 54, ""), -1,
      "GPIO wired to the module's TX output."),
-    ("gnss_tx_pin", "GNSS TX Pin", (I, -1, 48, ""), -1,
+    ("gnss_tx_pin", "GNSS TX Pin", (I, -1, 54, ""), -1,
      "GPIO wired to the module's RX input. Required for u-blox, optional"
      " for NMEA (read-only)."),
     ("gnss_uart_num", "GNSS UART", (I, 0, 2, ""), 1,
@@ -282,6 +284,17 @@ PARAMS = [
      "Optional integration. Standalone disables ESC discovery, telemetry"
      " polling and remote-control forwarding. Local lighting and accessories"
      " remain available. Refloat preserves the existing integration."),
+    ("bms_backend", "BMS Backend", (E, ["None", "OW", "SSBMS UART"]), 0,
+     "Select one BMS backend independently of the vehicle integration."
+     " BMS Enabled must also be on; None starts no communications."
+     " SSBMS UART polls read-only telemetry at 115200 baud; no"
+     " control commands are available."),
+    ("ssbms_rx_pin", "SSBMS UART RX Pin", (I, -1, 54, ""), -1,
+     "ESP UART receive GPIO, connected to SSBMS TX. -1 means unassigned."
+     " SSBMS uses UART 1 at 115200 baud (8N1)."),
+    ("ssbms_tx_pin", "SSBMS UART TX Pin", (I, -1, 54, ""), -1,
+     "ESP UART transmit GPIO, connected to SSBMS RX. -1 means unassigned."
+     " SSBMS uses UART 1 at 115200 baud (8N1)."),
 ]
 
 GROUPS = [
@@ -323,7 +336,8 @@ GROUPS = [
         ("Pubmote", ["pubmote_loop_delay",
                     "::sep::Paired Remote", "pubmote_remote_mac_a",
                     "pubmote_remote_mac_b", "pubmote_secret_code"]),
-        ("BMS", ["bms_type", "bms_rs485_chip", "bms_rs485_di_pin",
+        ("BMS", ["bms_backend", "::sep::SSBMS UART", "ssbms_rx_pin", "ssbms_tx_pin",
+                 "::sep::OW BMS Comms", "bms_type", "bms_rs485_chip", "bms_rs485_di_pin",
                  "bms_rs485_ro_pin", "bms_rs485_dere_pin",
                  "bms_wakeup_pin", "bms_override_soc",
                  "bms_charge_only", "bms_buff_size", "bms_loop_delay",
@@ -449,7 +463,8 @@ def emit_xml(path):
         a("        </group>")
     a("    </Grouping>")
     a("</ConfigParams>")
-    open(path, "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
+    with open(path, "w", encoding="utf-8", newline="\n") as output:
+        output.write("\n".join(out) + "\n")
 
 
 def iter_params():
@@ -479,7 +494,8 @@ def emit_datatypes(path):
     a("")
     a("// DATATYPES_H_")
     a("#endif")
-    open(path, "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
+    with open(path, "w", encoding="utf-8", newline="\n") as output:
+        output.write("\n".join(out) + "\n")
 
 
 def emit_lookup(path):
@@ -501,7 +517,7 @@ def emit_lookup(path):
     a("#include <stddef.h>")
     a('#include "datatypes.h"')
     a("")
-    a("typedef enum { CFG_F32 = 0, CFG_I32, CFG_U8, CFG_STR } cfg_field_type;")
+    a("typedef enum { CFG_F32 = 0, CFG_I32, CFG_U8, CFG_STR, CFG_PIN } cfg_field_type;")
     a("")
     a("#define CFG_NAME_LEN %d" % name_len)
     a("#define CFG_FIELD_COUNT %d" % len(PARAMS))
@@ -521,7 +537,7 @@ def emit_lookup(path):
         k = kind[0]
         t = {F: "CFG_F32", I: "CFG_I32", E: "CFG_U8", B: "CFG_U8",
              S: "CFG_STR"}[k]
-        a("    %s," % t)
+        a("    %s," % ("CFG_PIN" if name.endswith("_pin") else t))
     a("};")
     a("")
     a("// Buffer size (bytes) for CFG_STR fields, 0 otherwise. Used to bound")
@@ -533,11 +549,13 @@ def emit_lookup(path):
     a("")
     a("// CONF_LOOKUP_H_")
     a("#endif")
-    open(path, "w", encoding="utf-8", newline="\n").write("\n".join(out) + "\n")
+    with open(path, "w", encoding="utf-8", newline="\n") as output:
+        output.write("\n".join(out) + "\n")
 
 
 if __name__ == "__main__":
     here = os.path.dirname(os.path.abspath(__file__))
+    emit_header(Path(here).parent / "fa_cfg" / "pin_caps.h")
     emit_xml(os.path.join(here, "settings.xml"))
     emit_datatypes(os.path.join(here, "..", "fa_cfg", "datatypes.h"))
     emit_lookup(os.path.join(here, "..", "fa_cfg", "conf_lookup.h"))

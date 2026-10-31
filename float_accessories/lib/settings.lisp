@@ -27,8 +27,9 @@
 
 (defun save-config () {
     (dbg DBG-CFG "cfg store")
-    (ext-facfg-store)
-    (send-status "Settings saved")
+    (if (ext-facfg-store)
+        (send-status "Settings saved")
+        (send-msg "Settings were not saved. Check GPIO assignments and the console for details."))
 })
 
 (defun restore-config () {
@@ -79,19 +80,8 @@
         (dbg DBG-CFG "cfg start led")
     })
 
-    ; BMS loop: restart to pick up new pins/settings
-    (if (>= bms-context-id 0) {
-        (dbg DBG-CFG "cfg stop bms")
-        (var start-time (systime))
-        (setq bms-exit-flag t)
-        (loopwhile (and bms-exit-flag (< (- (systime) start-time) 2000000))
-            (yield 10000))
-        (if bms-exit-flag {
-            (dbg-warn "bms loop stuck")
-            (send-msg "WARNING: BMS loop did not exit in time.")
-        })
-    })
-    (setq bms-context-id (if (= (get-config 'bms-enabled) 1) (spawn bms-loop) -1))
+    ; Stop the previous owner before starting the selected BMS backend.
+    (if (bms-stop-backend) (bms-start-backend))
 
     ; Humidity loop
     (if (and (>= humidity-context-id 0) (!= (get-config 'humidity-enabled) 1)) {
@@ -205,18 +195,7 @@
     ; store the whole config to NVS on every sample - that was the lag.
     (setq control-store-pending (systime))
 
-    (if (and (= (get-config 'bms-enabled) 1) (> bms-type 1) (!= bms-charge-state in-bms-charge-state) ) {
-        (setq bms-charge-state (if (= bms-charge-state 1) 1 0))
-        (setq bms-user-cmd 0x64)
-    })
-})
-
-(defun bms-trigger-factory-init () {
-    (if (and (= (get-config 'bms-enabled) 1) (> bms-type 1) (= bms-rs485-chip 1) ) {
-        (setq bms-user-cmd 0x0e)
-    } {
-        (dbg-warn "bms factory init needs an enabled crypto BMS on an RS485 chip")
-    })
+    (bms-request-charge in-bms-charge-state)
 })
 
 (defun send-control () {
@@ -235,24 +214,6 @@
     ))
 
     (send-data config-string)
-})
-
-(defun send-keys (key-list counter-list) {
-    (print "Received key: ")
-    (print key-list)
-    (setq key-list (split-list key-list 4))
-    (set-config 'bms-key-a (pack-bytes-to-uint32 (ix key-list 0)))
-    (set-config 'bms-key-b (pack-bytes-to-uint32 (ix key-list 1)))
-    (set-config 'bms-key-c (pack-bytes-to-uint32 (ix key-list 2)))
-    (set-config 'bms-key-d (pack-bytes-to-uint32 (ix key-list 3)))
-    (print "Received counter: ")
-    (print counter-list)
-    (setq counter-list (split-list counter-list 4))
-    (set-config 'bms-counter-a (pack-bytes-to-uint32 (ix counter-list 0)))
-    (set-config 'bms-counter-b (pack-bytes-to-uint32 (ix counter-list 1)))
-    (set-config 'bms-counter-c (pack-bytes-to-uint32 (ix counter-list 2)))
-    (set-config 'bms-counter-d (pack-bytes-to-uint32 (ix counter-list 3)))
-    (save-config)
 })
 
 (defun accept-tos() {
@@ -274,7 +235,7 @@
         "float-stats"
         (str-from-n (integration-connection-state) "%d")
         (str-from-n (is-pubmote-connected) "%d")
-        (str-from-n (if (< (secs-since bms-last-activity-time) 1) 1 0) "%d")
+        (str-from-n (if (bms-connected) 1 0) "%d")
         (str-from-n bms-status "%d")
         (str-from-n bms-battery-type "%d")
         (str-from-n bms-battery-cycles "%d")
@@ -288,6 +249,7 @@
         (str-from-n (to-float (min gnss-age-s 9999.0)) "%.1f")
         (str-from-n (gnss-hdop) "%.1f")
         (str-from-n (gnss-speed) "%.2f")
+        (sysinfo 'hw-target)
     ) " "))
 
     (if (= (is-pubmote-connected) 1) {

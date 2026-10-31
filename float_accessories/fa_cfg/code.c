@@ -32,8 +32,11 @@
 #include "confparser.h"
 #include "confxml.h"
 #include "conf_lookup.h"
+#include "pin_caps.h"
 
 #include <string.h>
+
+void bms_extensions_init(void);
 
 HEADER
 
@@ -45,7 +48,29 @@ typedef struct {
 	volatile bool changed; // set when VESC Tool writes the config
 } fa_data;
 
+static int first_invalid_pin(const FaConfig *cfg) {
+	for (unsigned i = 0; i < CFG_FIELD_COUNT; i++) {
+		if (cfg_types[i] == CFG_PIN) {
+			int32_t pin;
+			memcpy(&pin, (const uint8_t *)cfg + cfg_offsets[i], sizeof(pin));
+			if (pin != -1 && !fa_gpio_valid(pin)) {
+				return (int)i;
+			}
+		}
+	}
+	return -1;
+}
+
+static void report_invalid_pin(int field) {
+	VESC_IF->printf("facfg: invalid GPIO for this target: %s (use -1 to unassign)", cfg_names[field]);
+}
+
 static bool write_cfg_to_eeprom(fa_data *d) {
+	int field = first_invalid_pin(&d->cfg);
+	if (field >= 0) {
+		report_invalid_pin(field);
+		return false;
+	}
 	uint32_t buffer[CONFIG_WORDS];
 	memset(buffer, 0, sizeof(buffer));
 
@@ -78,6 +103,12 @@ static void read_cfg_from_eeprom(fa_data *d) {
 		VESC_IF->printf("facfg: no stored config, using defaults");
 		confparser_set_defaults_faconfig(&d->cfg);
 	}
+	// Keep stored values visible for correction, but runtime reads below map
+	// invalid pins to unassigned. Loading never silently rewrites the backup.
+	int field = first_invalid_pin(&d->cfg);
+	if (field >= 0) {
+		report_invalid_pin(field);
+	}
 }
 
 // ---- Custom config interface (VESC Tool) --------------------------------
@@ -102,11 +133,23 @@ static int get_cfg(uint8_t *buffer, bool is_default) {
 static bool set_cfg(uint8_t *buffer) {
 	fa_data *d = (fa_data *)ARG;
 
-	bool res = confparser_deserialize_faconfig(buffer, &d->cfg);
+	// Reject the entire update without partially replacing the running config.
+	FaConfig *candidate = VESC_IF->malloc(sizeof(FaConfig));
+	if (!candidate) {
+		return false;
+	}
+	bool res = confparser_deserialize_faconfig(buffer, candidate);
+	int field = res ? first_invalid_pin(candidate) : -1;
+	if (field >= 0) {
+		report_invalid_pin(field);
+		res = false;
+	}
 	if (res) {
+		memcpy(&d->cfg, candidate, sizeof(FaConfig));
 		write_cfg_to_eeprom(d);
 		d->changed = true;
 	}
+	VESC_IF->free(candidate);
 
 	return res;
 }
@@ -168,9 +211,13 @@ static lbm_value ext_facfg_get(lbm_value *args, lbm_uint argn) {
 		memcpy(&v, p, sizeof(v));
 		return VESC_IF->lbm_enc_float(v);
 	}
+	case CFG_PIN:
 	case CFG_I32: {
 		int32_t v;
 		memcpy(&v, p, sizeof(v));
+		if (cfg_types[f] == CFG_PIN && v != -1 && !fa_gpio_valid(v)) {
+			v = -1;
+		}
 		return VESC_IF->lbm_enc_i32(v);
 	}
 	case CFG_STR: {
@@ -234,11 +281,23 @@ static lbm_value ext_facfg_set(lbm_value *args, lbm_uint argn) {
 	if (!VESC_IF->lbm_is_number(args[1])) {
 		return VESC_IF->lbm_enc_sym_terror;
 	}
+	if (cfg_types[f] == CFG_PIN) {
+		float value = VESC_IF->lbm_dec_as_float(args[1]);
+		// Check before conversion: reject NaN/infinity, fractions and overflow.
+		if (!(value >= -1.0f && value <= FA_GPIO_MAX) ||
+				value != (float)(int32_t)value ||
+				(value != -1.0f && !fa_gpio_valid((int32_t)value))) {
+			report_invalid_pin(f);
+			VESC_IF->lbm_set_error_reason("Invalid GPIO for this target (use -1 to unassign)");
+			return VESC_IF->lbm_enc_sym_eerror;
+		}
+	}
 	switch (cfg_types[f]) {
 	case CFG_F32: {
 		float v = VESC_IF->lbm_dec_as_float(args[1]);
 		memcpy(p, &v, sizeof(v));
 	} break;
+	case CFG_PIN:
 	case CFG_I32: {
 		int32_t v = VESC_IF->lbm_dec_as_i32(args[1]);
 		memcpy(p, &v, sizeof(v));
@@ -316,6 +375,7 @@ INIT_FUN(lib_info *info) {
 	VESC_IF->lbm_add_extension("ext-facfg-store", ext_facfg_store);
 	VESC_IF->lbm_add_extension("ext-facfg-restore", ext_facfg_restore);
 	VESC_IF->lbm_add_extension("ext-facfg-changed", ext_facfg_changed);
+	bms_extensions_init();
 
 	return true;
 }

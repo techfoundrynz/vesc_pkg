@@ -160,7 +160,7 @@
     (if (< can-id 0) {
         (setq can-id discover-can-id)
         (set-config 'can-id can-id)
-        (setq bms-can-id (get-bms-val 'bms-can-id))
+        (bms-note-can-source (get-bms-val 'bms-can-id))
         (setq need-fetch-cells t)
         (setq need-fetch-limits t)
         (print (str-merge "Float package found on CAN id " (str-from-n can-id)))

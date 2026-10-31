@@ -14,6 +14,8 @@ class VehicleTests(unittest.TestCase):
             self.skipTest("Set LBM_TEST_RUNNER")
         files = [ROOT / "lib/utils.lisp", ROOT / "lib/settings-vars.lisp",
                  ROOT / "lib/settings.lisp", ROOT / "lib/vehicle.lisp",
+                 ROOT / "lib/bms-vars.lisp", ROOT / "lib/bms.lisp",
+                 ROOT / "lib/bms-backend.lisp", ROOT / "lib/adapters/ssbms.lisp",
                  ROOT / "lib/lighting-control.lisp", ROOT / "lib/can.lisp",
                  ROOT.parent / "lib_esp_led_strip/esp_led_defs.lisp",
                  ROOT / "lib/led-vars.lisp", ROOT / "lib/led.lisp",

@@ -1,560 +1,177 @@
 @const-start
 
-(defun crypt (nonce-high nonce-low data start-offset len) {
-    (var restore-byte (bufget-u8 counter 15))
-    (bufset-u8 counter 0 nonce-high)
-    (bufset-u8 counter 1 nonce-low)
-    (aes-ctr-crypt key counter data start-offset len)
-    (bufset-u8 counter 15 restore-byte)
+; Public BMS service. Adapters publish normalized VESC BMS values after their
+; own wire validation. Only the selected, running backend may publish/command.
+(defun bms-connected ()
+    (and (bms-backend-active bms-active-backend) bms-valid
+         (< (secs-since bms-last-activity-time) bms-freshness-seconds)))
+
+(defun bms-set-freshness (source seconds)
+    (if (and (bms-backend-active source) (> seconds 0) (<= seconds 3.0))
+        (setq bms-freshness-seconds seconds)))
+
+(defun bms-reset-status () {
+    (setq bms-valid nil)
+    (setq bms-status -1)
+    (setq bms-battery-type -1)
+    (setq bms-battery-cycles -1)
+    (setq bms-charge-state 0)
+    (setq bms-last-activity-time 0)
+    (setq bms-is-charging nil)
+    (setq bms-charger-just-plugged nil)
 })
 
-(defunret checksum (data start-offset len) {
-    (var sum 0)
-    (looprange k start-offset len {
-        (setq sum (+ sum (bufget-u8 data k)))
-    })
-    (return sum)
+(defun bms-mark-received (source)
+    (if (bms-backend-active source) {
+        (setq bms-last-activity-time (systime))
+        (setq bms-valid t)
+        t
+    } nil))
+
+; Scalar values use VESC units (V, A, degrees C, SoC fraction). Indexed values
+; are per-cell voltages or temperatures. Publication alone does not mark fresh:
+; the adapter acknowledges the fully processed packet with bms-mark-received.
+(defun bms-publish-value (source field value)
+    (if (bms-backend-active source) (set-bms-val field value)))
+(defun bms-publish-indexed (source field index value)
+    (if (bms-backend-active source) (set-bms-val field index value)))
+
+(defun bms-publish-info (source field value) {
+    (if (bms-backend-active source)
+        (match field
+            (battery-type (setq bms-battery-type value))
+            (cycles (setq bms-battery-cycles value))
+            (charge-state (setq bms-charge-state value))
+            (_ nil)))
 })
 
-(defunret set-charge-state (nonce-high nonce-low charge-state) {
-    (if (>= bms-charge-state 0){
-        (def payload (bufcreate 2))
-        (bufset-u8 payload 0 0x64)
-        (bufset-u8 payload 1 (if (= charge-state 0x1) 0x00 0x01))
-        (def packet (construct-packet nonce-high nonce-low payload))
-        (free payload)
-        (gpio-write bms-rs485-dere-pin 1)
-        (uart-write packet)
-        (sleep 0.005)
-        (gpio-write bms-rs485-dere-pin 0)
-        (sleep 0.005)
-        (var ret (recv-packets 0x15 -1))
-        (free packet)
-        (return ret)
-    }{
-        (dbg-warn "bms no charge state yet")
-        (return false)
-    })
+(defun bms-publish-status (source temperature empty overcharged calculating charging) {
+    (if (bms-backend-active source)
+        (setq bms-status (+ (bitwise-and temperature 3)
+            (if empty 4 0) (if overcharged 8 0)
+            (if charging 32 0) (if calculating 64 0))))
 })
 
-(defunret factory-init-accept () {
-    (var init-payload2 (bufcreate 2))
-    (bufset-u8 init-payload2 0 0x03)
-    (bufset-u8 init-payload2 1 0x01)
-    (def init-packet2 (construct-packet 0x00 0x01 init-payload2))
-    (free init-payload2)
-    (gpio-write bms-rs485-dere-pin 1)
-    (uart-write init-packet2)
-    (sleep 0.005)
-    (gpio-write bms-rs485-dere-pin 0)
-    (sleep 0.005)
-    (var ret (recv-packets 0x0e 1))
-    (free init-packet2)
-    (return ret)
+(defun bms-capabilities ()
+    (if (bms-backend-active bms-active-backend) ((ix bms-active-hooks 4)) 0))
+
+(defun bms-command (command value) {
+    (var capability (match command
+        (charge-control BMS-CAP-CHARGE)
+        (factory-init BMS-CAP-FACTORY)
+        (pairing BMS-CAP-PAIRING)
+        (_ 0)))
+    (if (and (> capability 0) (!= (bitwise-and (bms-capabilities) capability) 0))
+        ((ix bms-active-hooks 3) command value)
+        nil)
 })
 
-(defunret factory-init () {
-    (var init-payload (bufcreate 4))
-    (bufset-u8 init-payload 0 0x05)
-    (bufset-u8 init-payload 1 0x52)
-    (bufset-u8 init-payload 2 0x4d)
-    (bufset-u8 init-payload 3 0x41);05RMA
-    (def init-packet (construct-packet 0x00 0x01 init-payload))
-    (free init-payload)
-    (gpio-write bms-rs485-dere-pin 1)
-    (uart-write init-packet)
-    (sleep 0.005)
-    (gpio-write bms-rs485-dere-pin 0)
-    (sleep 0.005)
-    (var ret (recv-packets 0x0e 0))
-    (free init-packet)
-    (return ret)
-})
-(defunret process-packet (data) {
-    (if (!=(bufget-u8 data 2) (bufget-u8 magic 2)){
-        (return false)
-    })
-    (var packet-checksum (bufget-u16 data (- (buflen data) 2)))
-    (var calc-checksum (checksum data 0 (- (buflen data) 2)))
-    (if (not-eq packet-checksum calc-checksum){
-        (return false)
-    })
-    (if bms-use-crypto {
-        (return (crypt (bufget-u8 data 3) (bufget-u8 data 4) data 5 (- (buflen data) 7)))
-    })
-    (return true)
-})
+(defun bms-request-charge (state)
+    (if (and (or (= state 0) (= state 1)) (!= state bms-charge-state))
+        (bms-command 'charge-control state)
+        nil))
+(defun bms-request-factory-init () (bms-command 'factory-init nil))
+(defun bms-pair (key-bytes counter-bytes)
+    (bms-command 'pairing (list key-bytes counter-bytes)))
 
-(defunret construct-packet (nonce-high nonce-low payload) {
-    (var packet (bufcreate (+ (buflen payload) 7)))
-    (bufcpy packet 0 magic 0 (buflen magic))
-    (bufset-u8 packet 3 nonce-high)
-    (bufset-u8 packet 4 nonce-low)
-    (crypt nonce-high nonce-low payload 0 (buflen payload))
-    (bufcpy packet 5 payload 0 (buflen payload))
-    (var calc-checksum  (checksum packet 0 (- (buflen packet) 2)))
-    (bufset-u8 packet (+ (buflen payload) 5) (shr calc-checksum 8))
-    (bufset-u8 packet (+ (buflen payload) 6) (bitwise-and calc-checksum 0xFF))
-    (return packet)
-})
+; Bridge an external CAN BMS without coupling its discovery to a protocol.
+(defun bms-note-can-source (id)
+    (setq bms-can-id (if (and (>= id 0) (= id (can-local-id))) -1 id)))
+(defun bms-cell-count ()
+    (if (> (get-bms-val 'bms-can-id) -1) (get-bms-val 'bms-cell-num) 0))
+(defun bms-soc () (min 1.0 (max 0.0 (get-bms-val 'bms-soc))))
 
-(defun parse-voltage (data){
-    ;(set-bms-val 'bms-v-tot (/ (bufget-u8 data (if bms-use-crypto 6 4)) 100.0))
-    ;(print data)
-})
-
-(defun parse-cell-voltage (data){
-    (var cell-index 0)
-    (var total-voltage 0)
-    (var v-cell-min (/ (bufget-u16 data (if bms-use-crypto 6 4)) (if bms-use-crypto 10000.0 1000.0)))
-    (var v-cell-max v-cell-min)
-    (if cell-count-uninit {
-        (set-bms-val 'bms-cell-num (/ (- (buflen data) 8) 2))
-        (setq cell-count-uninit false)
-    })
-
-    (looprange k (if bms-use-crypto 6 4) (- (buflen data) (+ (if bms-use-crypto 0 2) 3)) { ;Need to leave off end 16th cell for 15s BMS
-        (if (eq (mod k 2) 0) {
-            (var current-cell (/ (bufget-u16 data k) (if bms-use-crypto 10000.0 1000.0)))
-            (if (and (= cell-index 0) (= bms-override-soc 1)) {
-                (set-bms-val 'bms-soc (/ (estimate-soc current-cell voltage-curve) 100))
-            })
-            (set-bms-val 'bms-v-cell cell-index current-cell)
-            (setq cell-index (+ cell-index 1))
-            (setq total-voltage (+ total-voltage current-cell))
-            (if (> current-cell v-cell-max) (setq v-cell-max current-cell))
-            (if (< current-cell v-cell-min) (setq v-cell-min current-cell))
-        })
-    })
-    (set-bms-val 'bms-v-tot total-voltage)
-    (if (>= fw-num 6.06){
-        (set-bms-val 'bms-v-cell-min v-cell-min)
-        (set-bms-val 'bms-v-cell-max v-cell-max)
-    })
-    (if (dbg-tick DBG-BMS 'bms-val 5.0)
-        (dbg DBG-BMS (str-merge "bms v " (str-from-n (to-float total-voltage) "%.2f")
-            " n " (str-from-n cell-index "%d")
-            " min " (str-from-n v-cell-min "%.3f")
-            " max " (str-from-n v-cell-max "%.3f")
-            " soc " (str-from-n (* 100 (get-bms-val 'bms-soc)) "%.0f")
-            " A " (str-from-n (get-bms-val 'bms-i-in-ic) "%.2f"))))
-})
-
-(defun parse-soc (data){
-    (if (= bms-override-soc 0) {
-        (var soc (/ (bufget-u8 data (if bms-use-crypto 6 4)) 100.0))
-        (if (> soc 1.0) (setq soc 1.0))
-        (if (< soc 0.01) (setq soc 0.01))
-        (set-bms-val 'bms-soc soc)
+; Explicit CAN broadcasting lets adapters supply charging/balancing flags:
+; firmware 7.00 exposes no Lisp setters for those two bms_values members.
+; Only fresh complete snapshots are broadcast. No stale keepalive is generated.
+(defun bms-can-send (buffer packet byte-count) {
+    (var id (+ (shl packet 8) (can-local-id)))
+    (if (= byte-count 8) (can-send-eid id buffer) {
+        (var short-buffer (bufcreate byte-count))
+        (bufcpy short-buffer 0 buffer 0 byte-count)
+        (can-send-eid id short-buffer)
+        (free short-buffer)
     })
 })
-
-(defun parse-current (data) {
-    (var current-scaler (if bms-use-crypto 0.0366 0.055)); Current scaler. 0.0366 or 0.0378 not sure...
-    ;maybe look at tot-current from controller and then calculate scaler and take average to see which is closer?
-    (var current-limit (if bms-use-crypto 32.0 30.0)) ;Limit 32A or 32.7A, not sure.
-    (var current (* (bufget-i16 data (if bms-use-crypto 6 4)) current-scaler))
-
-    (if (and (not bms-charge-only) (>= current current-limit)) {
-        (if (= is-current-over-limit 0)
-            (dbg-warn (str-merge "bms current at limit " (str-from-n current "%.2f"))))
-        (setq is-current-over-limit 1)
-    }{
-        (setq is-current-over-limit 0)
-    })
-    (set-bms-val 'bms-i-in-ic current)
+(defun bms-can-pair (buffer packet value-a value-b) {
+    (ext-bms-can-pair buffer value-a value-b)
+    (bms-can-send buffer packet 8)
 })
-
-(defun parse-status (data) {
-    (var prev-status bms-status)
-    (setq bms-status (bufget-u8 data (if bms-use-crypto 6 4)))
-    (if (and (!= bms-status prev-status) (dbg-active DBG-BMS))
-        (dbg DBG-BMS (str-from-n bms-status "bms status 0x%02x")))
-    (setq is-charging (if (= (bitwise-and bms-status 0x20) 0) 0 1))
-    (setq is-battery-empty (if (= (bitwise-and bms-status 0x4) 0) 0 1))
-    (setq is-battery-temp-out-of-range (if (= (bitwise-and bms-status 0x3) 0) 0 1))
-    (setq is-battery-overcharged (if (= (bitwise-and bms-status 0x8) 0) 0 1))
-    (var is-soc-calculating (if (= (bitwise-and bms-status 0x40) 0) 0 1)) ;maybe or could be if balancing? Not sure cuz it came on while riding
-    ;well also observed -128 but have no clue what that means
-    (if (= is-charging 1) (if (<= (get-bms-val 'bms-i-in-ic) -0.5) (set-bms-val 'bms-v-charge (get-bms-val 'bms-v-tot) ) ) )
-})
-
-(defun parse-temp (data) {
-    (set-bms-val 'bms-temp-ic (bufget-i8 data (- (buflen data) 3)))
-    (var t-cell-max (bufget-i8 data (if bms-use-crypto 6 4)))
-    (looprange k (if bms-use-crypto 6 4) (- (buflen data) 3) {
-        (var temp-val (bufget-i8 data k))
-        (if (> temp-val t-cell-max) (setq t-cell-max temp-val))
-        (set-bms-val 'bms-temps-adc (- k (if bms-use-crypto 6 4)) temp-val)
-    })
-    (set-bms-val 'bms-temp-cell-max t-cell-max)
-})
-
-(defun parse-serial (data) {
-    (setq serial (bufget-u16 data (if bms-use-crypto 6 4)))
-})
-
-(defun parse-charger (data) {
-    (setq bms-charge-state (bufget-u8 data (if bms-use-crypto 6 4)))
-})
-
-(defun parse-battery-type (data) {
-    ;(var battery-types '((UNDEFINED . 0) (A123_LiFePO4 . 1) (VTC6 . 1) (HG2 . 3) (30Q . 4) (VTC5A . 5) (VTC5D . 6) (30Q6 . 7) (P28A . 8) (VTC6A . 9) (P42A . 10) (40T3 . 11) ))
-    (setq bms-battery-type (bufget-u8 data (if bms-use-crypto 6 4)))
-})
-
-(defun parse-cycles-health (data) {
-    (setq bms-battery-cycles (bufget-u16 data (if bms-use-crypto 6 4)))
-    ;TODO No way to set SoH in Lisp?
-    (var soh (/ (bufget-u8 data (if bms-use-crypto 8 6)) 100.0))
-    (if (> soh 1.0) (setq soh 1.0))
-    (if (< soh 0.01) (setq soh 0.01))
-    (set-bms-val 'bms-soh soh)
-})
-
-(defunret process-cmd (command data ack handshake) {
-    (cond
-        ((= command 0x00) {
-            (parse-status data)
+(defun bms-broadcast (source charging balancing allowed) {
+    (if (and (bms-backend-active source) (bms-connected)) {
+        (var buffer (bufcreate 8))
+        (bms-can-pair buffer 38 (get-bms-val 'bms-v-tot) (get-bms-val 'bms-v-charge))
+        (bms-can-pair buffer 39 (get-bms-val 'bms-i-in) (get-bms-val 'bms-i-in-ic))
+        (bms-can-pair buffer 40 (get-bms-val 'bms-ah-cnt) (get-bms-val 'bms-wh-cnt))
+        (var cells (get-bms-val 'bms-cell-num))
+        (var index 0)
+        (loopwhile (< index cells) {
+            (bufset-u8 buffer 0 index)
+            (bufset-u8 buffer 1 cells)
+            (var n (min 3 (- cells index)))
+            (looprange j 0 n
+                (bufset-i16 buffer (+ 2 (* j 2)) (to-i (* 1000.0 (get-bms-val 'bms-v-cell (+ index j))))))
+            (bms-can-send buffer 41 (+ 2 (* n 2)))
+            (setq index (+ index n))
         })
-        ;((= command 0x01) {
-            ;(parse-voltage data);donno why this doesn't get emmited sometimes
-        ;})
-        ((= command 0x02) {
-            (parse-cell-voltage data)
+        (bufclear buffer)
+        (bufset-u8 buffer 0 cells)
+        (looprange j 0 cells
+            (if (!= (get-bms-val 'bms-bal-state j) 0) {
+                (var byte-index (- 7 (to-i (/ j 8))))
+                (bufset-u8 buffer byte-index
+                    (bitwise-or (bufget-u8 buffer byte-index) (shl 1 (mod j 8))))
+            }))
+        (bms-can-send buffer 42 8)
+        (var temperatures (get-bms-val 'bms-temp-adc-num))
+        (setq index 0)
+        (loopwhile (< index temperatures) {
+            (bufset-u8 buffer 0 index)
+            (bufset-u8 buffer 1 temperatures)
+            (var n (min 3 (- temperatures index)))
+            (looprange j 0 n
+                (bufset-i16 buffer (+ 2 (* j 2)) (to-i (* 100.0 (get-bms-val 'bms-temps-adc (+ index j))))))
+            (bms-can-send buffer 43 (+ 2 (* n 2)))
+            (setq index (+ index n))
         })
-        ((= command 0x03) {
-            (parse-soc data)
-        })
-        ((= command 0x04) {
-            (parse-temp data)
-        })
-        ((= command 0x05) {
-            (parse-current data)
-        })
-        ((= command 0x06) {
-            (parse-serial data)
-        })
-        ;((= command 0x07) { ; acknowleged as valid packet by controller but no processing ;Emitted by BMS
-            ;static maybe these next bytes have to do with firmware build or hardware?
-        ;})
-        ((= command 0x08) {
-            (parse-battery-type data)
-        })
-        ;((= command 0x09) { ;looked at by controller
-        ;})
-        ;((= command 0x0A) { ; acknowleged as valid packet by controller but no processing. Sent during bms startup?
-        ;})
-        ;((= command 0x0B) { ;Emitted by BMS
-            ;static
-        ;})
-        ;((= command 0x0C) { ; acknowleged as valid packet by controller but no processing ;Emitted by BMS. Seems to be all 0 unless on charger.
-        ;})
-        ((= command 0x0D) {
-            (parse-cycles-health data)
-        })
-        ((= command 0x0E) {
-            (if ack {
-                (if (= handshake 0) {
-                ;(print "first ack");
-                    (return (factory-init-accept))
-                })
-                (if (= handshake 1) {
-                (dbg DBG-BMS "bms ack2")
-                    (if (!= (bufget-u16 data (if bms-use-crypto 6 4)) 1) { (return false)})
-                    (send-msg "Success")
-                    (return true)
-                })
-
-            })
-        })
-        ;((= command 0x0F) { ; Looked at by controller ;Emitted by BMS
-        ;    ;error?
-        ;})
-        ;((= command 0x10) { ; looked at by controller ;Emitted by BMS
-        ;    ;unknown maybe error code logs?
-        ;})
-        ;((= command 0x11) { ; looked at by controller
-        ;})
-        ;((= command 0x12) { ; acknowleged as valid packet by controller but no processing ;Emitted by BMS
-        ;})
-        ;((= command 0x13) { ;Emitted by BMS
-        ;})
-        ;((= command 0x14) { ;Emitted by BMS
-        ;})
-        ((= command 0x15) {
-            (if (and ack (= (bufget-u8 data (if bms-use-crypto 6 4)) bms-charge-state)) {(parse-charger data) (return false)})
-            (parse-charger data)
-        })
-        ;((= command 0x16) { ; looked at by controller ;Emitted by BMS
-            ;unknown last byte changes
-        ;})
-        ;So in bms recv we know there's no valid commands above 0x16 (command 0x64 is special and gets sent from controller to BMS)
-        ;((= command 0x64) { ;Sent by controller. Should be recieved by BMS and update 0x15
-            ;bms-charge-state cmd
-            ;(print "charge state cmd")
-        ;})
-        (t {
-            (if (dbg-active DBG-BMS)
-                (dbg DBG-BMS (str-from-n command "bms cmd ? 0x%02x")))
-            (return false)
-        })
-        )
-    (return true)
-})
-
-(defun load-keys () {
-    (var key-list (append (unpack-uint32-to-bytes (get-config 'bms-key-a)) (unpack-uint32-to-bytes (get-config 'bms-key-b)) (unpack-uint32-to-bytes (get-config 'bms-key-c)) (unpack-uint32-to-bytes (get-config 'bms-key-d))))
-    (var counter-list (append (unpack-uint32-to-bytes (get-config 'bms-counter-a)) (unpack-uint32-to-bytes (get-config 'bms-counter-b)) (unpack-uint32-to-bytes (get-config 'bms-counter-c)) (unpack-uint32-to-bytes (get-config 'bms-counter-d))))
-    (looprange i 0  (length key-list){
-        (bufset-u8 key i (ix key-list i))
-    })
-    (looprange i 0  (length counter-list){
-        (bufset-u8 counter i (ix counter-list i))
+        (bufclear buffer)
+        (bufset-i16 buffer 4 (to-i (* 100.0 (get-bms-val 'bms-temp-ic))))
+        (bms-can-send buffer 44 8)
+        (bufset-i16 buffer 0 (to-i (* 1000.0 (get-bms-val 'bms-v-cell-min))))
+        (bufset-i16 buffer 2 (to-i (* 1000.0 (get-bms-val 'bms-v-cell-max))))
+        (bufset-u8 buffer 4 (to-i (* 255.0 (get-bms-val 'bms-soc))))
+        (bufset-u8 buffer 5 (to-i (* 255.0 (get-bms-val 'bms-soh))))
+        (bufset-i8 buffer 6 (to-i (min 127 (max -128 (get-bms-val 'bms-temp-cell-max)))))
+        (bufset-u8 buffer 7 (+ (if charging 1 0) (if balancing 2 0) (if allowed 4 0)))
+        (bms-can-send buffer 45 8)
+        (bms-can-pair buffer 53 (get-bms-val 'bms-ah-cnt-chg-total) (get-bms-val 'bms-wh-cnt-chg-total))
+        (bms-can-pair buffer 54 (get-bms-val 'bms-ah-cnt-dis-total) (get-bms-val 'bms-wh-cnt-dis-total))
+        (free buffer)
     })
 })
 
-(defunret verify-keys (key counter key-crc counter-crc) {
-    (var key-crc-calc (crc32 key 0))
-    (var counter-crc-calc (crc32 counter 0))
-    (looprange i 0 (length key-crc) {
-        (if (and (= (ix key-crc i) key-crc-calc) (= (ix counter-crc i) counter-crc-calc)) (return true))
-    })
-    ; Gated: this dumps the raw AES key, so it must not appear in a console
-    ; log someone pastes into a support thread unless they asked for it.
-    (if (dbg-active DBG-BMS) {
-        (dbg DBG-BMS (str-merge "bms key crc " (to-str key-crc-calc) " " (to-str counter-crc-calc)))
-        (print key)
-    })
-    (return false)
-})
-
-(defunret recv-packets (cmd-ack handshake) {
-    (var read-timeout (if (= cmd-ack 0x0e)
-        1.0  ; 1 second for factory init
-        0.5)) ; 500ms for other commands like charge state
-    (var bytes-read (uart-read bms-buf (buflen bms-buf) nil nil read-timeout))
-    ;(print bms-buf)
-    (var found-packet nil)
-    (var start 0)
-    (loopwhile (>= (- bytes-read start) (if bms-use-crypto 12 10)) {  ; Check against minimum packet size
-        ; Look for magic bytes
-        (if (and (= (bufget-u8 bms-buf start) (bufget-u8 magic 0))
-                 (= (bufget-u8 bms-buf (+ start 1)) (bufget-u8 magic 1))
-                 (= (bufget-u8 bms-buf (+ start 2)) (bufget-u8 magic 2))) {
-            (setq bms-last-activity-time (systime)) ; Update after we see magic
-            (setq found-packet t)
-            ; Find the end of the packet (next magic bytes or end of buffer)
-            (var packet-end start)
-            (looprange j (+ start 3) (- bytes-read 2) {
-                (if (and (= (bufget-u8 bms-buf j) (bufget-u8 magic 0))
-                         (= (bufget-u8 bms-buf (+ j 1)) (bufget-u8 magic 1))
-                         (= (bufget-u8 bms-buf (+ j 2)) (bufget-u8 magic 2))) {
-                    (setq packet-end j)
-                    (break)
-                })
-            })
-            (if (= packet-end start) {
-                (setq packet-end bytes-read) ; If no end found, process to end of buffer
-            })
-
-            ; Create a new buffer for the packet
-            (var packet-length (- packet-end start))
-            (var packet (bufcreate packet-length))
-            (bufcpy packet 0 bms-buf start packet-length)
-            ; Process the packet
-            (if (process-packet packet) {
-                (var command (bufget-u8 packet (if bms-use-crypto 5 3))) ; Adjust for crypto/non-crypto
-
-                ; Gated: the BMS emits packets continuously, so this line
-                ; used to print several times a second forever and made the
-                ; lisp console unusable for anything else.
-                (if (dbg-active DBG-BMS)
-                    (dbg DBG-BMS (str-merge (str-from-n command "bms cmd 0x%02x")
-                        " len " (str-from-n packet-length "%d"))))
-                (if (and (>= cmd-ack 0) (= command cmd-ack)) {
-                    (var result (process-cmd command packet t handshake))
-                    (free packet)
-                    (return result)
-                })
-                (process-cmd command packet nil -1)
-            })
-            (free packet)
-            (setq start packet-end) ; Move start to the end of the processed packet
-        } {
-            (setq start (+ start 1)) ; Move to the next byte if magic bytes not found
+(defun bms-service-step () {
+    ; Preserve the existing charging heuristic and five-second plug-in window,
+    ; using normalized BMS values from the selected backend or external CAN BMS.
+    (if (or (bms-connected) (and (= bms-active-backend BMS-BACKEND-NONE) (>= bms-can-id 0))) {
+        (var previous bms-is-charging)
+        (setq bms-is-charging
+            (if (and (bms-connected) (>= bms-status 0))
+                (!= (bitwise-and bms-status 32) 0)
+                (and (> (get-bms-val 'bms-v-charge) 10.0)
+                    (> (abs (get-bms-val 'bms-i-in-ic)) 0.1))))
+        (if (and bms-is-charging (not previous)) {
+            (dbg DBG-BMS "bms charger in")
+            (setq bms-charger-just-plugged t)
+            (setq bms-charger-plug-in-time (secs-since 0))
         })
-    })
-    (if found-packet
-        (send-bms-can)
-        ; No magic bytes anywhere in the read: wrong pins, wrong BMS type or
-        ; the crypto/plain magic byte does not match what the BMS speaks.
-        (if (dbg-tick DBG-BMS 'bms-rx 5.0)
-            (dbg DBG-BMS (str-merge "bms no packet in " (str-from-n bytes-read "%d")))))
-    (return (< cmd-ack 0));if we're looking for an ack we failed to find one
-})
-
-(defunret init-bms () {
-    (uart-stop)
-    (sleep 1)
-    (if bms-use-crypto{
-        (if (< fw-num 6.06){
-            (dbg-err "bms crypto needs fw 6.06")
-            (send-msg "hw-express needs to be running 6.06")
-            (return false)
-        })
-        (load-keys)
-        (if (eq (verify-keys key counter key-crc counter-crc) false){
-            (dbg-err "bms bad keys - re-pair")
-            (send-msg "Invalid keys")
-            (return false)
-        })
-        (if (= bms-rs485-chip 1){
-            (if (or (< bms-rs485-di-pin 0) (not-eq (first (trap (gpio-configure bms-rs485-di-pin 'pin-mode-out))) 'exit-ok)){
-                (dbg-err (str-merge "bms bad di pin " (str-from-n bms-rs485-di-pin "%d")))
-                (send-msg "Invalid Pin: bms-rs485-di-pin")
-                (return false)
-            })
-            (if (or (< bms-rs485-dere-pin 0) (not-eq (first (trap (gpio-configure bms-rs485-dere-pin 'pin-mode-out))) 'exit-ok)){
-                (dbg-err (str-merge "bms bad dere pin " (str-from-n bms-rs485-dere-pin "%d")))
-                (send-msg "Invalid Pin: bms-rs485-dere-pin")
-                (return false)
-            })
-        (gpio-write bms-rs485-dere-pin 0); disable transit mode
-        })
-    })
-    (if (>= bms-rs485-ro-pin 0){
-        (var ret)
-        (if (= bms-rs485-chip 1) {
-            (setq ret (first (trap (gpio-configure bms-rs485-ro-pin 'pin-mode-in))))
-        }{
-            (setq ret (first (trap (gpio-configure bms-rs485-ro-pin 'pin-mode-in-pu))))
-        })
-        (if (not-eq ret 'exit-ok) {
-            (dbg-err (str-merge "bms bad ro pin " (str-from-n bms-rs485-ro-pin "%d")))
-            (send-msg "Invalid Pin: rs485-ro-pin")
-            (return false)
-        })
-    }{
-        (dbg-err "bms ro pin not set")
-        (send-msg "Invalid Pin: rs485-ro-pin")
-        (return false)
-    })
-    (if (and (= bms-charge-only 1) (>= bms-wakeup-pin 0)){
-        (if (not-eq (first (trap (gpio-configure bms-wakeup-pin 'pin-mode-out))) 'exit-ok) {
-            (dbg-err (str-merge "bms bad wakeup pin " (str-from-n bms-wakeup-pin "%d")))
-            (send-msg "Invalid Pin: bms-wakeup-pin")
-            (return false)
-        })
-        (gpio-write bms-wakeup-pin 0)
-    })
-
-    (uart-start 1 bms-rs485-ro-pin (if (= bms-rs485-chip 1) bms-rs485-di-pin -1) 115200);If GNSS is connected UART 1 must be used
-    (set-bms-val 'bms-temp-adc-num 4)
-    (bufset-u8 magic 2 (if bms-use-crypto 0xbb 0xaa))
-    (yield 100000);Gotta make sure uart is ready
-    ;now we're cookin'
-    (dbg DBG-BMS "bms init ok")
-    (return true)
-})
-
-(defun load-bms-settings (){
-    (setq bms-rs485-di-pin (get-config 'bms-rs485-di-pin))
-    (setq bms-rs485-ro-pin (get-config 'bms-rs485-ro-pin))
-    (setq bms-rs485-dere-pin (get-config 'bms-rs485-dere-pin))
-    (setq bms-wakeup-pin (get-config 'bms-wakeup-pin))
-    (setq bms-override-soc (get-config 'bms-override-soc))
-    (setq bms-type (get-config 'bms-type))
-    (setq bms-use-crypto nil)
-    (if (> bms-type 1) (setq bms-use-crypto t))
-    (setq bms-rs485-chip (get-config 'bms-rs485-chip))
-    (setq bms-loop-delay (get-config 'bms-loop-delay))
-    (setq bms-charge-only (get-config 'bms-charge-only))
-    (dbg DBG-BMS (str-merge "bms type " (str-from-n bms-type "%d")
-        " chip " (str-from-n bms-rs485-chip "%d")
-        " pins " (str-from-n bms-rs485-di-pin "%d")
-        " " (str-from-n bms-rs485-ro-pin "%d")
-        " " (str-from-n bms-rs485-dere-pin "%d")
-        " " (str-from-n bms-wakeup-pin "%d")
-        " hz " (str-from-n bms-loop-delay "%d")))
-})
-
-(defunret bms-loop () {
-    (load-bms-settings)
-    (if (= bms-type 0) {
-        (dbg-warn "bms type None - parked")
-        (loopwhile (not bms-exit-flag) (sleep 1))
-        (setq bms-exit-flag nil)
-        (return nil)
-    })
-    (if (and (> bms-type 0) (init-bms)) {
-
-        (var next-run-time (secs-since 0))  ; Set first run time
-        (var loop-start-time 0)
-        (var loop-end-time 0)
-        (def bms-buf (bufcreate (get-config 'bms-buff-size)))
-        (if (< bms-loop-delay 1) {
-            (dbg-warn "bms bad rate, using 20Hz")
-            (setq bms-loop-delay 20)
-        })
-        (var bms-loop-delay-sec (/ 1.0 bms-loop-delay))
-        (loopwhile t{
-        (if (!= dbg-mask 0) (setq dbg-ticks-bms (+ dbg-ticks-bms 1)))
-        (setq loop-start-time (secs-since 0))
-
-            (if bms-exit-flag {
-                    (break)
-            })
-            ;lets check if there's a user command
-            (if (!= bms-user-cmd -1) {
-                 (dbg DBG-BMS (str-from-n bms-user-cmd "bms user cmd 0x%02x"))
-                 (if (and (= bms-rs485-chip 1) bms-use-crypto (< (secs-since bms-last-activity-time) 1)) {
-                    (loopwhile (not (if (= bms-user-cmd 0x0e) (factory-init) (set-charge-state 0x00 0x01 bms-charge-state))) {(sleep 0.01)})
-                 }{
-                    ;error
-                    (dbg-err "bms not connected")
-                    (send-msg "BMS not connected")
-                 })
-                 (setq bms-user-cmd -1)
-            }{
-                (recv-packets -1 -1)
-            })
-            (if (dbg-active DBG-BMS) {
-                (var conn (if (< (secs-since bms-last-activity-time) 1) 1 0))
-                (if (!= conn dbg-prev-bms-conn) {
-                    (setq dbg-prev-bms-conn conn)
-                    (dbg DBG-BMS (if (= conn 1) "bms up" "bms down"))
-                })
-            })
-            (if (and (= bms-charge-only 1) (>= bms-wakeup-pin 0)) {
-                (if (and (> (secs-since bms-last-activity-time) bms-timeout) (vehicle-fresh) (not (running-state))) { ;also check can bus has fresh data and float pacakge state is not running just incase someone with discharge enabled configures the bms-wakeup-button for some reason.
-                    (dbg DBG-BMS "bms wakeup pulse")
-                    (gpio-write bms-wakeup-pin 1)
-                    (yield 10000)
-                    (gpio-write bms-wakeup-pin 0)
-                })
-            })
-            (setq loop-end-time (secs-since 0))
-            (var actual-loop-time (- loop-end-time loop-start-time))
-
-            (var time-to-wait (- next-run-time (secs-since 0)))
-            (if (> time-to-wait 0) {
-                (yield (* time-to-wait 1000000))
-            }{
-                (setq next-run-time (secs-since 0))
-            })
-            (setq next-run-time (+ next-run-time bms-loop-delay-sec))
-        })
-        (free bms-buf)
-        (setq bms-exit-flag nil)
+        (if (and previous (not bms-is-charging)) (dbg DBG-BMS "bms charger out"))
     } {
-        (dbg-warn "bms init failed - parked")
-        ; Park rather than return: spawn-with-restart would otherwise respawn
-        ; this every second forever, repeating the init errors and the "Invalid
-        ; Pin" dialog at 1 Hz. Same pattern gnss-loop already uses.
-        (loopwhile (not bms-exit-flag) (sleep 1))
-        (setq bms-exit-flag nil)
+        (setq bms-is-charging nil)
     })
-    (return t)
+    (if (not (and bms-charger-just-plugged
+                  (<= (- (secs-since 0) bms-charger-plug-in-time) 5)))
+        (setq bms-charger-just-plugged nil))
 })
+
 @const-end

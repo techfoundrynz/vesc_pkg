@@ -52,25 +52,8 @@
         (setq loop-start-time (secs-since 0))
         (if (not sim-active) {
             (integration-step)
+            (bms-service-step)
             (vehicle-refresh-battery)
-
-            (if (or (>= bms-can-id 0) (< (secs-since bms-last-activity-time) 1)){
-                (var prev-charging-state bms-is-charging)
-                (setq bms-is-charging (and (> (get-bms-val 'bms-v-charge) 10.0) (> (abs(get-bms-val 'bms-i-in-ic)) 0.1)))
-
-                (if (and bms-is-charging (not prev-charging-state)){
-                        (dbg DBG-CAN "can charger in")
-                        (setq bms-charger-just-plugged t)
-                        (setq bms-charger-plug-in-time (secs-since 0))
-                })
-                (if (and prev-charging-state (not bms-is-charging))
-                    (dbg DBG-CAN "can charger out"))
-                ; Check if we're within 5 seconds of initial plug-in and charging started
-                (if (not (and bms-charger-just-plugged (<= (- (secs-since 0) bms-charger-plug-in-time) 5))){
-                    ; Reset the flag if more than 5 seconds have passed
-                    (setq bms-charger-just-plugged nil)
-                })
-            })
 
             (if need-fetch-cells {
                 (setq need-fetch-cells nil)
@@ -119,8 +102,7 @@
     (var target can-id)
     (var generation integration-generation)
     (if (>= target 0) {
-        (var cells 0)
-        (if (> (get-bms-val 'bms-can-id) -1) (setq cells (get-bms-val 'bms-cell-num)))
+        (var cells (bms-cell-count))
         (if (= cells 0) {
             (print "No BMS info; querying ESC for series cells...")
             (var response)

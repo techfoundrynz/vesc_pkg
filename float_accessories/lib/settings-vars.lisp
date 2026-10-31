@@ -10,10 +10,7 @@
 (def fw-num 0.0)
 
 ; Runtime state (not persisted)
-(def bms-context-id -1)
-(def bms-exit-flag nil)
 (def humidity-exit-flag nil)
-(def bms-last-activity-time 0)
 (def pubmote-context-id -1)
 (def led-context-id -1)
 (def led-exit-flag nil)
@@ -21,7 +18,6 @@
 (def led-last-activity-time 0)
 (def can-context-id -1)
 (def can-last-activity-time 0)
-(def bms-charge-state 0) ;0 if 100, 1 if 90
 (def log-context-id -1)
 ; systime of the last live control change (brightness/on-off from the QML
 ; page). config-watch-loop persists the config once this settles, so dragging
@@ -36,9 +32,6 @@
 (def led-brightness-idle 0.0)
 (def led-brightness-status 0.0)
 
-(def bms-status -1)
-(def bms-battery-type -1)
-(def bms-battery-cycles -1)
 
 (def humidity-context-id -1)
 

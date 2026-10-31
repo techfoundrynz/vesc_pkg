@@ -670,12 +670,14 @@
         ; Rainbow is the only mode led-mode-footpad offers, so no branch yet.
         ; Same set as LED mode 5, so a footpad bar and the drive strips run one
         ; rainbow between them rather than three that happen to look alike.
-        (seg-want-cyc seg-footpad FX-RAINBOW PAL-RGBW 0 CYC-RAINBOW bri)
+        (if lights-off
+            (seg-want-off seg-footpad)
+            (seg-want-cyc seg-footpad FX-RAINBOW PAL-RGBW 0 CYC-RAINBOW bri))
     })
     (if (>= seg-button 0) {
         (if (= led-mode-button 1)
-            (seg-want-gauge seg-button (to-i (* 255.0 battery-percent-remaining)) (if bms-is-charging 32 0) bri)
-            (seg-want-cyc seg-button FX-RAINBOW PAL-RGBW 0 CYC-RAINBOW bri)
+            (seg-want-gauge seg-button (to-i (* 255.0 battery-percent-remaining)) (if bms-is-charging 32 0) status-bri)
+            (seg-want-cyc seg-button FX-RAINBOW PAL-RGBW 0 CYC-RAINBOW status-bri)
         )
     })
 })
@@ -848,7 +850,7 @@
 
     ; Means "the shutoff branch runs", carrying the branches that outrank it -
     ; otherwise a long handtest kept front and rear breathing while the footpad
-    ; went dark. The aux strips honour it too, hence deciding it here.
+    ; went dark. The footpad strip honours it too; button/status stay independent.
     (setq lights-off (and (vehicle-fresh) (!= state 15)
                           (not handtest-mode)
                           (> last-activity-sec idle-timeout-shutoff)
@@ -983,12 +985,8 @@
         (seg-want-cyc tail-seg FX-STROBE 0 0x00FF0000u32 CYC-STROBE-ALARM tail-bri))
 })
 
-(defun led-draw-aux () {
-    (if lights-off {
-        (seg-want-off seg-footpad)
-        (seg-want-off seg-button)
-    } (update-aux-leds aux-bri))
-})
+(defun led-draw-aux ()
+    (update-aux-leds aux-bri))
 
 ; Master LEDs-off. The status bar is deliberately not included: it is
 ; diagnostic, so turning the lights off must not blind you.

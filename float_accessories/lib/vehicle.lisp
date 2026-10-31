@@ -19,10 +19,6 @@
 (def motor-temp-filtered 0)
 (def odometer -1)
 (def can-id -1)
-(def bms-can-id -1)
-(def bms-is-charging nil)
-(def bms-charger-just-plugged nil)
-(def bms-charger-plug-in-time 0)
 (def vin -1)
 (def last-running-state-time 0)
 (def battery-percent-remaining 0.0)
@@ -128,11 +124,11 @@
 
 (defun battery-data-fresh ()
     (or (vehicle-fresh)
-        (and (>= bms-status 0) (< (secs-since bms-last-activity-time) 1.0))))
+        (bms-connected)))
 
 (defun vehicle-refresh-battery () {
     (if (and (not (vehicle-fresh)) (battery-data-fresh))
-        (setq battery-percent-remaining (min 1.0 (max 0.0 (get-bms-val 'bms-soc)))))
+        (setq battery-percent-remaining (min 1.0 (max 0.0 (bms-soc)))))
 })
 
 (defun running-state ()

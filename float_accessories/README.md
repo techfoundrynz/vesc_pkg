@@ -4,18 +4,6 @@
 
 A VESC Express package for BMS, Pubmote, GNSS and LED control, with optional Refloat integration for one-wheeled balance vehicles.
 
-<H3>Integration</H3>
-
-Select <b>Refloat</b> (the default) for vehicle telemetry and remote-control
-forwarding, or <b>Standalone</b> to run local lighting and accessories
-without ESC discovery or polling. Standalone lighting keeps the selected riding
-effect and brightness, defaults to the front direction, and supports local
-on/off and highbeam controls. Ride-dependent features require fresh vehicle
-telemetry. A connected BMS can still supply battery and charging information.
-
-The bundled Refloat adapter is isolated from the lighting core. See
-<a href='LED.md'>LED.md</a> for the provider interface and standalone behavior.
-
 <H3>Credits</H3>
 
 Special Thanks: Benjamin Vedder, surfdado, NuRxG, Siwoz, lolwheel (OWIE), ThankTheMaker (rESCue), 4_fools (avaspark), auden_builds (pubmote)
@@ -34,7 +22,8 @@ My Blog: <a href='https://sylerclayton.com'>https://sylerclayton.com</a>
 
 <ul>
   <li>New LED backend</li>
+  <li>SSBMS UART support at 115200 baud with configurable RX/TX pins: read-only cell, temperature and charging telemetry, estimated SoC, and VESC BMS CAN reporting.</li>
+  <li>Standalone mode runs local lighting and accessories without Refloat discovery, telemetry polling or remote-control forwarding.</li>
   <li>GNSS receiver support (u-blox or NMEA over UART) - feeds the SD log position and the CAN GNSS broadcast</li>
   <li>Diagnostics card on the Config tab: per-area verbose logging plus a one-shot system report. The flag is held in RAM only, so it never persists and resets on reboot.</li>
 </ul>
-

@@ -18,6 +18,12 @@
 (read-eval-program settings-vars)
 (import "lib/settings.lisp" 'settings)
 (read-eval-program settings)
+(import "lib/bms-vars.lisp" 'bms-vars)
+(read-eval-program bms-vars)
+(import "lib/bms.lisp" 'bms)
+(read-eval-program bms)
+(import "lib/bms-backend.lisp" 'bms-backend)
+(read-eval-program bms-backend)
 (import "lib/vehicle.lisp" 'vehicle)
 (read-eval-program vehicle)
 (import "lib/lighting-control.lisp" 'lighting-control)
@@ -38,10 +44,6 @@
 (read-eval-program led-vars)
 (import "lib/led.lisp" 'led)
 (read-eval-program led)
-(import "lib/bms-vars.lisp" 'bms-vars)
-(read-eval-program bms-vars)
-(import "lib/bms.lisp" 'bms)
-(read-eval-program bms)
 (import "pubmote/pubmote-consts.lisp" 'pubmote-consts)
 (import "pubmote/pubmote-vars.lisp" 'pubmote-vars)
 (import "pubmote/pubmote-utils.lisp" 'pubmote-utils)
@@ -50,6 +52,13 @@
 (read-eval-program pubmote-vars)
 (read-eval-program pubmote-utils)
 (read-eval-program pubmote)
+; Bundled BMS adapters register callbacks without opening any hardware.
+(import "lib/adapters/ow-bms-vars.lisp" 'ow-bms-vars)
+(read-eval-program ow-bms-vars)
+(import "lib/adapters/ow-bms.lisp" 'ow-bms)
+(read-eval-program ow-bms)
+(import "lib/adapters/ssbms.lisp" 'ssbms)
+(read-eval-program ssbms)
 ; Bundled optional adapter. Omit these two lines for a core-only package.
 (import "lib/adapters/refloat.lisp" 'refloat-adapter)
 (read-eval-program refloat-adapter)
@@ -149,7 +158,6 @@
         " on " (sysinfo 'hw-target)
         " fw " (str-from-n fw-num "%.2f")))
 
-    (setq bms-last-activity-time (systime))
     (setq led-last-activity-time (systime))
 
     (if (!= (str-cmp (to-str (sysinfo 'hw-type)) "hw-express") 0) {
@@ -237,9 +245,7 @@
     (if (= (get-config 'pubmote-enabled) 1){
         (setq pubmote-context-id (spawn-with-restart "pubmote-loop" nil pubmote-loop))
     })
-    (if (= (get-config 'bms-enabled) 1){
-        (setq bms-context-id (spawn-with-restart "bms-loop" nil bms-loop))
-    })
+    (bms-start-backend)
 
     (if (= (get-config 'humidity-enabled) 1) (setq humidity-context-id (spawn-with-restart "humidity-loop" nil humidity-loop)))
 

@@ -69,7 +69,13 @@
 (led-draw-status)
 (expect (bufget-u8 seg-want-look (+ (* seg-status 8) 3)) 0)
 ; BMS gauges work independently of any vehicle provider.
+(setq test-bms-enabled 1)
+(setq test-bms-backend 1)
+(setq bms-active-backend BMS-BACKEND-OW)
 (setq bms-status 0)
+(setq bms-valid t)
+(setq bms-worker-running t)
+(setq bms-active-hooks (list nil nil nil nil nil))
 (setq bms-last-activity-time test-now)
 (vehicle-refresh-battery)
 (near battery-percent-remaining 0.75)

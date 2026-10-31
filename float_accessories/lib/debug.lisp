@@ -239,7 +239,7 @@
         " mode " (str-from-n led-mode "%d")
         " dir " (str-from-n direction "%d"))))
     (trap (print (str-merge "bms age " (str-from-n (secs-since bms-last-activity-time) "%.1f")
-        " type " (str-from-n bms-type "%d")
+        " backend " (str-from-n bms-active-backend "%d")
         " status " (str-from-n bms-status "%d")
         " v " (str-from-n (get-bms-val 'bms-v-tot) "%.2f"))))
     (trap (print (str-merge "rem conn " (str-from-n (is-pubmote-connected) "%d")
