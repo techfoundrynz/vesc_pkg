@@ -57,10 +57,10 @@
 (def led-footpad-white-output)
 (def led-footpad-reversed)
 (def led-footpad-timing)
-(def led-startup-timeout)
+; Fixed boot-animation window; not a persisted configuration setting.
+(def LED-STARTUP-SECONDS 3)
 (def led-dim-on-highbeam-ratio 0.0)
 (def led-max-brightness)
-(def led-follow-refloat 0)
 (def led-show-battery-charging 0)
 (def led-front-highbeam-pin)
 (def led-rear-highbeam-pin)
@@ -104,6 +104,7 @@
 
 ; led-decide: what the drawing phases render.
 (def current-led-mode 0)
+(def led-startup-active nil)
 (def last-activity-sec 0.0)
 (def can-activity-sec 0.0)
 (def front-bri 0)

@@ -1,5 +1,6 @@
 VESC_TOOL ?= vesc_tool
 PYTHON ?= python3
+LBM_TEST_RUNNER ?= /tmp/fa_lbm_runner
 
 # One binary per chip - native libs only run on the chip they were built for.
 ESP_TARGETS = esp32c3 esp32c6 esp32s3 esp32p4
@@ -9,6 +10,11 @@ ESP_TARGETS = esp32c3 esp32c6 esp32s3 esp32p4
 VERSION=`cat version`
 
 all: float_accessories.vescpkg
+
+# Host-only regression suite; no firmware toolchain or connected device needed.
+test:
+	$(MAKE) -f tests/lispbm.mk LBM_TEST_RUNNER="$(LBM_TEST_RUNNER)" "$(LBM_TEST_RUNNER)"
+	LBM_TEST_RUNNER="$(LBM_TEST_RUNNER)" $(PYTHON) -m unittest discover -s tests -v
 
 # Regenerate the config sources from conf/gen_conf.py when it changed.
 conf/settings.xml fa_cfg/datatypes.h fa_cfg/conf_lookup.h &: conf/gen_conf.py
@@ -68,4 +74,4 @@ clean:
 	done
 	$(MAKE) -C ../lib_esp_led_strip clean
 
-.PHONY: all clean esp_led_libs fa_cfg_libs
+.PHONY: all clean test esp_led_libs fa_cfg_libs

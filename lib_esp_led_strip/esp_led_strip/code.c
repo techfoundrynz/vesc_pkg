@@ -242,24 +242,26 @@ static uint32_t pack(uint32_t r, uint32_t g, uint32_t b, uint32_t w) {
 	return (w << 24) | (r << 16) | (g << 8) | b;
 }
 
+// Walk channels instead of unrolling them: S3 loads this code into scarce IRAM.
 static uint32_t scale(uint32_t c, uint32_t num) { // num 0..255
-	uint32_t w = (((c >> 24) & 0xFF) * num) / 255;
-	uint32_t r = (((c >> 16) & 0xFF) * num) / 255;
-	uint32_t g = (((c >> 8) & 0xFF) * num) / 255;
-	uint32_t b = ((c & 0xFF) * num) / 255;
-	return pack(r, g, b, w);
+	uint32_t result = 0;
+	for (unsigned int shift = 0; shift < 32; shift += 8) {
+		result |= ((((c >> shift) & 0xFF) * num) / 255) << shift;
+	}
+	return result;
 }
 
 // Interpolate a position 0..255 across 4 anchor colours (wrapping).
 static uint32_t interp4(const uint32_t *c, uint8_t pos) {
 	uint32_t a = c[pos / 64];
 	uint32_t b = c[(pos / 64 + 1) % 4];
-	uint32_t f = pos % 64; // 0..63 between anchors
-
-	uint32_t r = (((a >> 16) & 0xFF) * (63 - f) + ((b >> 16) & 0xFF) * f) / 63;
-	uint32_t g = (((a >> 8) & 0xFF) * (63 - f) + ((b >> 8) & 0xFF) * f) / 63;
-	uint32_t bl = ((a & 0xFF) * (63 - f) + (b & 0xFF) * f) / 63;
-	return pack(r, g, bl, 0);
+	uint32_t f = pos % 64;
+	uint32_t result = 0;
+	for (unsigned int shift = 0; shift < 24; shift += 8) {
+		result |= ((((a >> shift) & 0xFF) * (63 - f)
+			+ ((b >> shift) & 0xFF) * f) / 63) << shift;
+	}
+	return result;
 }
 
 static uint32_t palette_at(uint8_t pal, uint8_t pos) {
@@ -680,19 +682,20 @@ static void render_seg(esp_led_t *st, const seg_t *s, uint8_t master_cur) {
 			c = 0;
 		}
 
-		uint32_t w = (c >> 24) & 0xFF;
-		uint32_t r = (c >> 16) & 0xFF;
-		uint32_t g = (c >> 8) & 0xFF;
-		uint32_t b = c & 0xFF;
-
+		// Channel shifts for each wire format. Tables live in data RAM on S3,
+		// leaving more executable RAM available for the renderer itself.
+		static const uint8_t shifts[][4] = {
+			[TYPE_GRB]  = {8, 16, 0, 24},
+			[TYPE_RGB]  = {16, 8, 0, 24},
+			[TYPE_GRBW] = {8, 16, 0, 24},
+			[TYPE_RGBW] = {16, 8, 0, 24},
+			[TYPE_WRGB] = {24, 16, 8, 0}
+		};
+		unsigned int type = s->type <= TYPE_WRGB ? s->type : TYPE_GRB;
+		int channels = type >= TYPE_GRBW ? 4 : 3;
 		uint8_t *px = tx + i * colors;
-		switch (s->type) {
-		case TYPE_RGB:  px[0] = r; px[1] = g; px[2] = b; break;
-		case TYPE_GRBW: px[0] = g; px[1] = r; px[2] = b; px[3] = w; break;
-		case TYPE_RGBW: px[0] = r; px[1] = g; px[2] = b; px[3] = w; break;
-		case TYPE_WRGB: px[0] = w; px[1] = r; px[2] = g; px[3] = b; break;
-		case TYPE_GRB:
-		default:        px[0] = g; px[1] = r; px[2] = b; break;
+		for (int k = 0; k < channels; k++) {
+			px[k] = (uint8_t)(c >> shifts[type][k]);
 		}
 	}
 }
@@ -803,6 +806,8 @@ static void render_thd(void *arg) {
 
 // ---- Extension helpers --------------------------------------------------
 
+// Variable-arity callers validate their range first, then pass n = argn to
+// reuse the numeric checks without duplicating this loop in executable RAM.
 static bool check_num_args(lbm_value *args, lbm_uint argn, lbm_uint n) {
 	if (argn != n) {
 		return false;
@@ -831,9 +836,7 @@ static seg_t *seg_arg(esp_led_t *st, lbm_value v) {
 static lbm_value ext_seg_def(lbm_value *args, lbm_uint argn) {
 	esp_led_t *st = state();
 	if (argn < 4 || argn > 6) return VESC_IF->lbm_enc_sym_terror;
-	for (lbm_uint i = 0; i < argn; i++) {
-		if (!VESC_IF->lbm_is_number(args[i])) return VESC_IF->lbm_enc_sym_terror;
-	}
+	if (!check_num_args(args, argn, argn)) return VESC_IF->lbm_enc_sym_terror;
 
 	seg_t *s = seg_arg(st, args[0]);
 	int pin = VESC_IF->lbm_dec_as_i32(args[1]);
@@ -895,9 +898,7 @@ static lbm_value ext_seg_def(lbm_value *args, lbm_uint argn) {
 static lbm_value ext_seg_overlay_def(lbm_value *args, lbm_uint argn) {
 	esp_led_t *st = state();
 	if (argn < 1 || argn > 1 + esp_led_OV_MAX) return VESC_IF->lbm_enc_sym_terror;
-	for (lbm_uint i = 0; i < argn; i++) {
-		if (!VESC_IF->lbm_is_number(args[i])) return VESC_IF->lbm_enc_sym_terror;
-	}
+	if (!check_num_args(args, argn, argn)) return VESC_IF->lbm_enc_sym_terror;
 
 	seg_t *s = seg_arg(st, args[0]);
 	if (!s || !s->defined) return VESC_IF->lbm_enc_sym_terror;
@@ -1189,9 +1190,7 @@ static void fx_set(esp_led_t *st, seg_t *s, uint8_t fx) {
 static lbm_value ext_seg_look(lbm_value *args, lbm_uint argn) {
 	esp_led_t *st = state();
 	if (argn < 6 || argn > 7) return VESC_IF->lbm_enc_sym_terror;
-	for (lbm_uint i = 0; i < argn; i++) {
-		if (!VESC_IF->lbm_is_number(args[i])) return VESC_IF->lbm_enc_sym_terror;
-	}
+	if (!check_num_args(args, argn, argn)) return VESC_IF->lbm_enc_sym_terror;
 
 	seg_t *s = seg_arg(st, args[0]);
 	if (!s) return VESC_IF->lbm_enc_sym_terror;
@@ -1409,10 +1408,9 @@ static lbm_value ext_seg_palette(lbm_value *a, lbm_uint n) {
 	if (!s) return VESC_IF->lbm_enc_sym_terror;
 
 	VESC_IF->mutex_lock(st->lock);
-	s->cpal[0] = VESC_IF->lbm_dec_as_u32(a[1]);
-	s->cpal[1] = VESC_IF->lbm_dec_as_u32(a[2]);
-	s->cpal[2] = VESC_IF->lbm_dec_as_u32(a[3]);
-	s->cpal[3] = VESC_IF->lbm_dec_as_u32(a[4]);
+	for (int i = 0; i < 4; i++) {
+		s->cpal[i] = VESC_IF->lbm_dec_as_u32(a[i + 1]);
+	}
 	s->pal = 0; // select the custom palette
 	VESC_IF->mutex_unlock(st->lock);
 	return VESC_IF->lbm_enc_sym_true;
@@ -1423,9 +1421,7 @@ static lbm_value ext_seg_palette(lbm_value *a, lbm_uint n) {
 static lbm_value ext_col_rgbw(lbm_value *args, lbm_uint argn) {
 	esp_led_t *st = state();
 	if (argn != 3 && argn != 4) return VESC_IF->lbm_enc_sym_terror;
-	for (lbm_uint i = 0; i < argn; i++) {
-		if (!VESC_IF->lbm_is_number(args[i])) return VESC_IF->lbm_enc_sym_terror;
-	}
+	if (!check_num_args(args, argn, argn)) return VESC_IF->lbm_enc_sym_terror;
 
 	uint32_t r = VESC_IF->lbm_dec_as_u32(args[0]) & 0xFF;
 	uint32_t g = VESC_IF->lbm_dec_as_u32(args[1]) & 0xFF;

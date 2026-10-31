@@ -18,6 +18,10 @@
 (read-eval-program settings-vars)
 (import "lib/settings.lisp" 'settings)
 (read-eval-program settings)
+(import "lib/vehicle.lisp" 'vehicle)
+(read-eval-program vehicle)
+(import "lib/lighting-control.lisp" 'lighting-control)
+(read-eval-program lighting-control)
 (import "lib/can.lisp" 'can)
 (read-eval-program can)
 (import "lib/logger.lisp" 'logger)
@@ -46,6 +50,9 @@
 (read-eval-program pubmote-vars)
 (read-eval-program pubmote-utils)
 (read-eval-program pubmote)
+; Bundled optional adapter. Omit these two lines for a core-only package.
+(import "lib/adapters/refloat.lisp" 'refloat-adapter)
+(read-eval-program refloat-adapter)
 (import "lib/commands.lisp" 'commands)
 (read-eval-program commands)
 (import "lib/sim.lisp" 'sim)
@@ -142,7 +149,6 @@
         " on " (sysinfo 'hw-target)
         " fw " (str-from-n fw-num "%.2f")))
 
-    (setq can-last-activity-time (systime))
     (setq bms-last-activity-time (systime))
     (setq led-last-activity-time (systime))
 
@@ -154,6 +160,8 @@
 
     (load-native-libs)
     (setq boot-t-libs (secs-since 0))
+    (integration-select (get-config 'integration))
+    (apply-battery-config (get-config 'soc-type) (get-config 'cell-type))
 
     (setq led-on (get-config 'led-on))
     (setq led-highbeam-on (get-config 'led-highbeam-on))
@@ -198,9 +206,7 @@
             (setq pubmote-last-bt-c bt-c)
             (setq pubmote-last-bt-z bt-z)
             (setq pubmote-last-is-rev is-rev)
-            (if (>= (get-config 'can-id) 0) {
-                (can-cmd (get-config 'can-id) (str-replace (to-str (list jsy jsx bt-c bt-z is-rev)) "(" "(set-remote-state "))
-            })
+            (integration-control jsy jsx bt-c bt-z is-rev)
         }))
         (cons 'get-telemetry (fn () {
             (list fault-code pitch-angle roll-angle state switch-state vin rpm speed tot-current duty-cycle-now (phase-utilization) (battery-utilization) distance-abs fet-temp-filtered motor-temp-filtered odometer battery-percent-remaining)

@@ -95,6 +95,7 @@
     (setq fault-code 0)
 
     (if sim-in-link {
+        (setq integration-ever-connected t)
         (setq can-id sim-can-id)
         (setq can-last-activity-time (systime))
     }{
@@ -143,6 +144,8 @@
 ; up, and counts as activity, so the idle timeout and shutoff never fired again)
 ; and pitch-angle (kept mall grab latched, same side effect).
 (defun sim-restore () {
+    (setq integration-ever-connected nil)
+    (setq vehicle-valid nil)
     (setq state 0)
     (setq switch-state 0)
     (setq sat-t 0)

@@ -2,7 +2,19 @@
 
 <H3>About</H3>
 
-A VESC Express package for BMS, Pubmote, GNSS and LED control on VESC Express modules for one-wheeled balance vehicles running Refloat.
+A VESC Express package for BMS, Pubmote, GNSS and LED control, with optional Refloat integration for one-wheeled balance vehicles.
+
+<H3>Integration</H3>
+
+Select <b>Refloat</b> (the default) for vehicle telemetry and remote-control
+forwarding, or <b>Standalone</b> to run local lighting and accessories
+without ESC discovery or polling. Standalone lighting keeps the selected riding
+effect and brightness, defaults to the front direction, and supports local
+on/off and highbeam controls. Ride-dependent features require fresh vehicle
+telemetry. A connected BMS can still supply battery and charging information.
+
+The bundled Refloat adapter is isolated from the lighting core. See
+<a href='LED.md'>LED.md</a> for the provider interface and standalone behavior.
 
 <H3>Credits</H3>
 

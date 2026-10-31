@@ -247,7 +247,7 @@ Selected in this order, later steps overriding earlier ones:
 1. **LED Mode** — the baseline.
 2. **Idle** — no activity for `Idle Timeout` (default 1 s) *and* CAN telemetry
    fresh within 1 s → **LED Mode Idle** at idle brightness.
-3. **Startup** — within `Startup Pattern Time` of boot (default 20 s) and not
+3. **Startup** — within the fixed 3-second window after boot and not
    riding → **LED Mode Startup**.
 
 "Activity" means riding, mall grab, or a charge display.
@@ -381,8 +381,8 @@ settings remain at RGB + W.
 
 ### Brightness levels
 
-**Follow Refloat Brightness** is off by default. When enabled, FA polls Refloat's
-external LCM interface at up to 10 Hz. Only a full, valid reply (external LCM
+With the **Refloat** vehicle provider selected, FA automatically polls
+Refloat's external LCM interface at up to 10 Hz. Only a full, valid reply (external LCM
 control enabled in Refloat) activates following. Active, idle and status targets
 replace the corresponding local targets at runtime, with **Max Brightness** still
 applied. Mall grab uses the status target. FA's highbeam switch remains local;
@@ -391,9 +391,92 @@ controlled by FA.
 
 A disabled, malformed or out-of-range reply immediately restores local targets;
 one second without a valid reply also restores them. Saved local brightness
-settings are never overwritten. LED diagnostics include `src refloat` or
+settings are never overwritten. LED diagnostics include `src provider` or
 `src local` in the periodic brightness report. Refloat's external LCM interface
-must be configured on the ESC; enabling this FA option alone does not activate it.
+must be configured on the ESC. There is no separate brightness-following option
+in FA; **Standalone** disables the entire vehicle adapter.
+
+### Optional vehicle providers
+
+**Integration** selects **Refloat** (default) or
+**Standalone**. The latter stops discovery, vehicle polling, humidity
+forwarding and Pubmote control forwarding. Local configuration, QML controls,
+LED effects, BMS, Pubmote pairing, GNSS, logging and humidity sensing remain
+available. Pubmote has no vehicle telemetry or control destination in standalone
+mode. Logs contain unknown vehicle defaults until a provider supplies data.
+
+Standalone uses riding brightness and mode after the startup effect. Automatic
+direction, footpad displays, mall grab, braking and idle/shutoff transitions
+require fresh vehicle data. Local highbeam on/off still works in standalone.
+Without a battery source, battery mode falls back to White/Red and the status
+strip is off. A fresh BMS can supply the battery gauge and charging display.
+When a selected provider loses its link, old riding/footpad data is cleared,
+remote forwarding stops and front/rear/status strips breathe blue. This also
+runs while awaiting the provider's first valid telemetry. The configured startup
+animation runs first on front/rear strips for a fixed 3 seconds; connecting takes over
+afterwards if telemetry is still unavailable. Charging display keeps its existing priority, and
+the master LED switch still controls front/rear output.
+
+Integration connection state belongs to the generic provider interface
+(`integration-connection-state`):
+`0` standalone, `1` connecting (no successful telemetry yet), `2` connected,
+`3` disconnected (previously connected, now stale). The first value after
+`float-stats` is this connection state, replacing the previous connected boolean.
+It shows **Connecting** until initial detection succeeds, then **Disconnected**
+on link loss. The connection row is named **Integration** and is hidden
+in standalone mode. The FA/app link remains a separate status.
+
+The implementation boundaries are:
+
+- `lib/vehicle.lisp`: normalized state, freshness and provider lifecycle.
+- `lib/lighting-control.lisp`: temporary brightness overrides, separate from
+  saved local settings and capped by the renderer's Max Brightness.
+- `lib/can.lisp`: transport housekeeping, BMS charging state and generic ESC
+  configuration queries.
+- `lib/adapters/refloat.lisp`: all Refloat command IDs, discovery,
+  decoding, LCM polling, humidity forwarding and remote-control commands.
+
+An adapter registers with
+`(integration-register id start tick receive control stop)`. Registration is passive;
+`integration-select` activates one registered provider. `start` runs on the CAN
+worker, `tick` runs at its configured frequency, and `receive` returns true only
+for packets in the adapter's namespace. `control` receives
+`(jsy jsx bt-c bt-z is-rev)` only while telemetry is fresh. `stop` must release
+its resources promptly. Discovery must check ownership after yielding; selection
+changes revoke ownership and increment `integration-generation`.
+
+Providers publish complete normalized snapshots through
+`(vehicle-publish id values)`. The 20-value schema and normalized state/footpad
+IDs are documented beside that function. Values use volts, erpm, km/h, amps,
+degrees, signed duty from -1 to 1, and SoC from 0 to 1; phase current is negative
+under braking in either direction. Providers must
+validate their wire packets before publishing. Only a full valid snapshot
+refreshes vehicle state; ancillary replies cannot keep stale telemetry alive.
+
+Brightness adapters call `(lighting-override id ride idle status)` with fractions
+from 0 to 1. Overrides expire after one second and are released on provider
+selection changes. They never persist settings. The Refloat adapter accepts
+these values only from a full LCM reply proving external LCM is enabled.
+
+For a package with no Refloat code, omit the adapter's `import` and
+`read-eval-program` lines in `float_accessories.lisp`. No core module references
+adapter symbols. An unavailable provider falls back to standalone. This is a
+bundled adapter interface; separate runtime plugin installation and a public
+lighting wire protocol are not implemented by this extraction.
+
+### Host regression tests
+
+Run `make test` from the package directory using Linux or WSL. It builds the
+sibling firmware's LispBM host runner and runs the complete Python test suite,
+including startup, standalone/provider behavior, brightness, native wire output,
+serialization and package compaction. When a built S3 LED binary is present,
+the suite also checks it against the reported 7680-byte executable-block limit. It requires GCC, Make and Python 3; no VESC toolchain or
+connected hardware is needed. The LispBM checkout must be present at
+`../../vesc_express/main/lispBM`.
+
+Override `LBM_TEST_RUNNER` to choose its executable path, or `PYTHON` to select
+the Python interpreter. These are host checks; hardware boot and LED behavior
+still need verification on the device.
 
 Four settings, all fractions from 0 to 1, and all capped by **Max Brightness**:
 

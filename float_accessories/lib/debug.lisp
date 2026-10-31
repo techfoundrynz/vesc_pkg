@@ -212,6 +212,7 @@
         " up " (str-from-n (secs-since 0) "%.0f"))))
     (trap (print (str-merge "canid " (str-from-n (get-config 'can-id) "%d")
         " self " (str-from-n (can-local-id) "%d")
+        " provider " (str-from-n integration-id "%d")
         " canage " (str-from-n (secs-since can-last-activity-time) "%.1f"))))
     (trap (print (str-merge "cid led " (str-from-n led-context-id "%d")
         " can " (str-from-n can-context-id "%d")

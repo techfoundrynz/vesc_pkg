@@ -93,8 +93,6 @@ PARAMS = [
      "Upper limit applied to every LED brightness."),
     ("led_dim_on_highbeam_ratio", "Dim On Highbeam", (F, 0.0, 1.0, 0.05, ""), 0.2,
      "How much the rest of the strip dims while the highbeam is on."),
-    ("led_startup_timeout", "Startup Pattern Time", (I, 0, 600, " s"), 20,
-     "How long the startup pattern shows after boot."),
     ("led_loop_delay", "LED Loop Rate", (I, 1, 100, " Hz"), 20,
      "Update rate of the LED state logic."),
     ("led_show_battery_charging", "Show Charging", (B,), 1,
@@ -280,17 +278,17 @@ PARAMS = [
        "Channels used for deliberate white on RGBW strips. RGB + W preserves"
        " the existing output; coloured effects are unchanged.")
       for strip in ("front", "rear", "status", "footpad")],
-    ("led_follow_refloat", "Follow Refloat Brightness", (B,), 0,
-     "Use Refloat active, idle and status brightness only when external LCM"
-     " control is enabled and responding. Max Brightness still applies."
-     " Falls back to local brightness after one second without a valid reply."
-     " Highbeam switching remains local; its intensity follows active brightness."),
+    ("integration", "Integration", (E, ["Standalone", "Refloat"]), 1,
+     "Optional integration. Standalone disables ESC discovery, telemetry"
+     " polling and remote-control forwarding. Local lighting and accessories"
+     " remain available. Refloat preserves the existing integration."),
 ]
 
 GROUPS = [
     ("General", [
         ("Features", ["led_enabled", "bms_enabled", "pubmote_enabled",
                      "log_enabled", "humidity_enabled", "gnss_enabled",
+                     "::sep::Integration", "integration",
                      "::sep::CAN Bus", "can_id", "can_loop_delay"]),
         ("LEDs", ["led_on", "led_highbeam_on", "led_mode", "led_mode_idle",
                      "led_mode_startup", "led_mode_status", "led_mode_button",
@@ -298,11 +296,11 @@ GROUPS = [
                      "::sep::Behavior", "led_mall_grab_enabled",
                      "led_brake_light_enabled", "led_brake_light_min_amps",
                      "idle_timeout", "idle_timeout_shutoff",
-                     "::sep::Brightness", "led_follow_refloat", "led_brightness",
+                     "::sep::Brightness", "led_brightness",
                      "led_brightness_highbeam", "led_brightness_idle",
                      "led_brightness_status", "led_max_brightness",
                      "led_dim_on_highbeam_ratio",
-                     "::sep::Advanced", "led_startup_timeout",
+                     "::sep::Advanced",
                      "led_loop_delay",
                      "led_show_battery_charging"]),
         ("Front", ["led_front_timing", "led_front_pin", "led_front_num",

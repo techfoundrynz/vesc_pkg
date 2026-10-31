@@ -13,10 +13,10 @@ class SocTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("LBM_TEST_RUNNER"),
                          "Set LBM_TEST_RUNNER to the LispBM test runner (see tests/lispbm.mk)")
     def test_voltage_curves_and_normalization(self):
-        can_source = (ROOT / "lib/can.lisp").read_text()
+        can_source = (ROOT / "lib/vehicle.lisp").read_text()
         # Use the production curves without initializing unrelated CAN state.
         curves = can_source[can_source.index("(defun get-voltage-curve"):
-                            can_source.index("; --- CAN discovery")]
+                            can_source.index("; Provider callbacks:")]
         program = "\n".join([(ROOT / "lib/utils.lisp").read_text(), curves,
                              (ROOT / "tests/soc.lisp").read_text()])
         program = program.replace("@const-start", "").replace("@const-end", "")

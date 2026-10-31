@@ -11,7 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 class RefloatBrightnessTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("LBM_TEST_RUNNER"), "Set LBM_TEST_RUNNER")
     def test_poll_parse_and_render_targets(self):
-        files = [ROOT / "lib/can.lisp", ROOT / "lib/led-vars.lisp",
+        files = [ROOT / "lib/vehicle.lisp", ROOT / "lib/lighting-control.lisp",
+                 ROOT / "lib/can.lisp", ROOT / "lib/adapters/refloat.lisp",
+                 ROOT / "lib/led-vars.lisp",
                  ROOT / "lib/led.lisp", ROOT / "tests/refloat_brightness.lisp"]
         program = "\n".join(p.read_text() for p in files)
         program = program.replace("@const-start", "").replace("@const-end", "")

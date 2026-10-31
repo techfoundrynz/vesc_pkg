@@ -45,11 +45,11 @@
     led-mode-status led-mode-startup led-mode-button led-mode-footpad
     ; behaviour
     led-mall-grab-enabled led-brake-light-enabled led-brake-light-min-amps
-    idle-timeout idle-timeout-shutoff led-startup-timeout led-loop-delay
+    idle-timeout idle-timeout-shutoff led-loop-delay
     led-show-battery-charging
     ; brightness
     led-brightness led-brightness-highbeam led-brightness-idle
-    led-brightness-status led-max-brightness led-dim-on-highbeam-ratio led-follow-refloat
+    led-brightness-status led-max-brightness led-dim-on-highbeam-ratio
     ; status
     led-status-pin led-status-num led-status-type led-status-white-output led-status-reversed
     led-status-timing
@@ -71,7 +71,7 @@
 (defun load-led-settings () {
     (loopforeach k led-setting-keys (setvar k (get-config k)))
     ; A config change must wait for a fresh reply before following the ESC.
-    (setq refloat-lcm-valid nil)
+    (lighting-release)
 })
 
 ; ---- Segment setup ------------------------------------------------------
@@ -631,17 +631,23 @@
     (if (> (abs rpm) 250.0) (setq rpm-fast-time (systime)))
 
     (cond
-        (handtest-mode
+        ((and (vehicle-fresh) handtest-mode)
             (seg-want-bar seg-status 0x000000FFu32
                 (cond ((= switch-state 3) 255)
                       ((or (= switch-state 1) (= switch-state 2)) 128)
                       (t 16))
                 0 status-bri))
 
-        ((= state 15) ; disabled
+        ((and (vehicle-fresh) (= state 15)) ; disabled
             (seg-want-fx seg-status FX-SOLID 0 0x00FF0000u32 32 status-bri))
 
-        ((or (>= can-activity-sec 1) (< can-id 0)) ; connecting
+        ((not (integration-selected)) ; standalone: no missing-ESC animation
+            (if (battery-data-fresh)
+                (seg-want-gauge seg-status (to-i (* 255.0 battery-percent-remaining))
+                    (if bms-is-charging 32 0) status-bri)
+                (seg-want-off seg-status)))
+
+        ((integration-connecting)
             (seg-want-cyc seg-status FX-BREATHE 0 0x000000FFu32 CYC-BREATHE status-bri))
 
 
@@ -708,11 +714,16 @@
 ; Which way the board is travelling, with a commit window so a rock or a bit of
 ; rollback does not swap the headlight. Wheelslip (3) is ignored outright.
 (defun led-track-direction () {
+    (if (not (vehicle-fresh)) {
+        (setq direction 1)
+        (setq prev-direction 1)
+        (setq direction-change-start-time 0)
+    })
     (var idle-rpm-darkride 100)
     (if (= state 4) ; RUNNING_UPSIDEDOWN
         (setq idle-rpm-darkride (* idle-rpm-darkride -1))
     )
-    (if (!= state 3) {
+    (if (and (vehicle-fresh) (!= state 3)) {
         (var current-direction direction)
         (if (> rpm idle-rpm-darkride) (setq current-direction 1))
         (if (< rpm (* idle-rpm-darkride -1)) (setq current-direction -1))
@@ -743,7 +754,7 @@
 ; Mall grab: board held nose-up while not riding. Short press of the footpad
 ; toggles the LEDs, long press toggles the highbeam.
 (defun led-track-mall-grab () {
-    (if (and (not (running-state)) (> pitch-angle 70)) {
+    (if (and (vehicle-fresh) (not (running-state)) (> pitch-angle 70)) {
         (setq led-mall-grab (if (= led-mall-grab-enabled 1) 1 0))
         (if (= switch-state 3) {
             (if (not mall-grab-press-active) {
@@ -796,27 +807,29 @@
     (setq can-activity-sec (secs-since can-last-activity-time))
 
     ; Mode and brightness. Later rules override earlier ones.
-    (var follow (refloat-brightness-active))
-    (var ride-bri (if follow refloat-lcm-brightness led-brightness))
-    (var idle-bri (if follow refloat-lcm-idle led-brightness-idle))
-    (var stat-bri (if follow refloat-lcm-status led-brightness-status))
+    (var follow (lighting-override-active))
+    (var ride-bri (if follow lighting-ride led-brightness))
+    (var idle-bri (if follow lighting-idle led-brightness-idle))
+    (var stat-bri (if follow lighting-status led-brightness-status))
     (setq current-led-mode led-mode)
     (setq led-current-brightness (min ride-bri led-max-brightness))
     (if (= led-mall-grab 1)
         (setq led-current-brightness (min stat-bri led-max-brightness)))
-    (if (and (>= last-activity-sec idle-timeout) (<= can-activity-sec 1)) {
+    (if (and (vehicle-fresh) (>= last-activity-sec idle-timeout)) {
         (setq current-led-mode led-mode-idle)
         (setq led-current-brightness (min idle-bri led-max-brightness))
     })
-    (if (= state 5)
+    (if (and (vehicle-fresh) (= state 5))
         (setq led-current-brightness (min idle-bri led-max-brightness)))
-    (if (and (<= (secs-since 0) led-startup-timeout) (not (running-state)))
+    (setq led-startup-active
+        (and (< (secs-since 0) LED-STARTUP-SECONDS) (not (running-state))))
+    (if led-startup-active
         (setq current-led-mode led-mode-startup))
 
     ; Highbeams: the strip facing the direction of travel lights its highbeam
     ; (mode 1 = PWM pin, mode 2 = embedded overlay pixels) and the rest of that
     ; strip dims by the configured ratio (0 = fully off, like the original).
-    (var highbeam-active (and (= led-on 1) (= led-highbeam-on 1) (running-state) (!= state 5)))
+    (var highbeam-active (and (= led-on 1) (= led-highbeam-on 1) (or (not (integration-selected)) (running-state)) (!= state 5)))
     (setq hb-front (and highbeam-active (>= direction 0) (> led-front-highbeam-mode 0)))
     (setq hb-rear (and highbeam-active (< direction 0) (> led-rear-highbeam-mode 0)))
     (setq hb-frac (min (if follow ride-bri led-brightness-highbeam) led-max-brightness))
@@ -836,7 +849,7 @@
     ; Means "the shutoff branch runs", carrying the branches that outrank it -
     ; otherwise a long handtest kept front and rear breathing while the footpad
     ; went dark. The aux strips honour it too, hence deciding it here.
-    (setq lights-off (and (!= state 15)
+    (setq lights-off (and (vehicle-fresh) (!= state 15)
                           (not handtest-mode)
                           (> last-activity-sec idle-timeout-shutoff)
                           (< can-activity-sec 1)
@@ -873,7 +886,7 @@
             (dbg DBG-LED (str-merge "led bri " (str-from-n front-bri "%d")
                 " " (str-from-n rear-bri "%d")
                 " " (str-from-n status-bri "%d")
-                (if (refloat-brightness-active) " src refloat" " src local")
+                (if (lighting-override-active) " src provider" " src local")
                 " dir " (str-from-n direction "%d")
                 " mg " (str-from-n led-mall-grab "%d")
                 " age " (str-from-n can-activity-sec "%.2f"))))
@@ -935,11 +948,15 @@
             (seg-want-gauge head-seg (to-i (* 255.0 battery-percent-remaining)) 32 head-bri)
             (seg-want-gauge tail-seg (to-i (* 255.0 battery-percent-remaining)) 32 tail-bri)
         })
-        ((= state 15) {
+        ((and (integration-connecting) (not led-startup-active)) {
+            (seg-want-cyc head-seg FX-BREATHE 0 0x000000FFu32 CYC-BREATHE head-bri)
+            (seg-want-cyc tail-seg FX-BREATHE 0 0x000000FFu32 CYC-BREATHE tail-bri)
+        })
+        ((and (vehicle-fresh) (= state 15)) {
             (seg-want-fx head-seg FX-SOLID 0 0x00FF0000u32 32 head-bri)
             (seg-want-fx tail-seg FX-SOLID 0 0x00FF0000u32 32 tail-bri)
         })
-        (handtest-mode {
+        ((and (vehicle-fresh) handtest-mode) {
             (seg-want-cyc head-seg FX-BREATHE 0 0x000000FFu32 CYC-BREATHE head-bri)
             (seg-want-cyc tail-seg FX-BREATHE 0 0x000000FFu32 CYC-BREATHE tail-bri)
         })
@@ -947,7 +964,7 @@
             (seg-want-off head-seg)
             (seg-want-off tail-seg)
         })
-        ((and (or (= current-led-mode 1) (= led-mall-grab 1)) (< can-activity-sec 1)) {
+        ((and (or (= current-led-mode 1) (= led-mall-grab 1)) (battery-data-fresh)) {
             (seg-want-gauge head-seg (to-i (* 255.0 battery-percent-remaining)) (if bms-is-charging 32 0) head-bri)
             (seg-want-gauge tail-seg (to-i (* 255.0 battery-percent-remaining)) (if bms-is-charging 32 0) tail-bri)
         })

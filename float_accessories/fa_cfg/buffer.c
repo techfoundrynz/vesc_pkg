@@ -18,6 +18,7 @@
 #include "buffer.h"
 #include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
@@ -118,7 +119,11 @@ void buffer_append_float32(uint8_t *buffer, float number, float scale, int32_t *
 void buffer_append_float32_auto(uint8_t *buffer, float number, int32_t *index) {
     // Set subnormal numbers to 0 as they are not handled properly
     // using this method.
-    if (fabsf(number) < 1.5e-38) {
+    // Keep float serialization in single precision. On S3, accidental double
+    // arithmetic pulls software helpers into the scarce executable RAM heap.
+    // This threshold rounds upward to float, preserving the original test for
+    // every float input (including the two values bracketing the threshold).
+    if (fabsf(number) < 1.5e-38f) {
         number = 0.0;
     }
 
@@ -127,7 +132,7 @@ void buffer_append_float32_auto(uint8_t *buffer, float number, int32_t *index) {
     float sig_abs = fabsf(sig);
     uint32_t sig_i = 0;
 
-    if (sig_abs >= 0.5) {
+    if (sig_abs >= 0.5f) {
         sig_i = (uint32_t) ((sig_abs - 0.5f) * 2.0f * 8388608.0f);
         e += 126;
     }
@@ -223,7 +228,9 @@ float buffer_get_float32_auto(const uint8_t *buffer, int32_t *index) {
 
     float sig = 0.0;
     if (e != 0 || sig_i != 0) {
-        sig = (float) sig_i / (8388608.0 * 2.0) + 0.5;
+        // Power-of-two scaling and this addition are exact in float: sig_i
+        // contains at most 23 bits, so no double intermediate is needed.
+        sig = (float) sig_i / (8388608.0f * 2.0f) + 0.5f;
         e -= 126;
     }
 

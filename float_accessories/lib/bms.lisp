@@ -527,7 +527,7 @@
                 })
             })
             (if (and (= bms-charge-only 1) (>= bms-wakeup-pin 0)) {
-                (if (and (> (secs-since bms-last-activity-time) bms-timeout) (< (secs-since can-last-activity-time) 1) (not (running-state))) { ;also check can bus has fresh data and float pacakge state is not running just incase someone with discharge enabled configures the bms-wakeup-button for some reason.
+                (if (and (> (secs-since bms-last-activity-time) bms-timeout) (vehicle-fresh) (not (running-state))) { ;also check can bus has fresh data and float pacakge state is not running just incase someone with discharge enabled configures the bms-wakeup-button for some reason.
                     (dbg DBG-BMS "bms wakeup pulse")
                     (gpio-write bms-wakeup-pin 1)
                     (yield 10000)

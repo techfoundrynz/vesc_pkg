@@ -45,6 +45,7 @@
 ; Tool or from lisp). Starts/stops the feature loops to match the config.
 (defun apply-config () {
     (dbg DBG-CFG "cfg apply")
+    (integration-select (get-config 'integration))
     (setq led-on (get-config 'led-on))
     (setq led-highbeam-on (get-config 'led-highbeam-on))
     (setq led-brightness (get-config 'led-brightness))
@@ -271,7 +272,7 @@
     (var gnss-fix (if (and (< gnss-age-s 5.0) (or (!= (ix gnss-ll 0) 0.0) (!= (ix gnss-ll 1) 0.0))) 1 0))
     (send-data (str-join (list
         "float-stats"
-        (str-from-n (if (< (secs-since can-last-activity-time) 1) 1 0) "%d")
+        (str-from-n (integration-connection-state) "%d")
         (str-from-n (is-pubmote-connected) "%d")
         (str-from-n (if (< (secs-since bms-last-activity-time) 1) 1 0) "%d")
         (str-from-n bms-status "%d")

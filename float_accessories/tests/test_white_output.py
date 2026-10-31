@@ -1,7 +1,7 @@
 """Exercise LED behavior with the host LispBM runner.
 
-make -f tests/lispbm.mk /tmp/fa_white_lbm_runner
-LBM_TEST_RUNNER=/tmp/fa_white_lbm_runner python -m unittest discover -s tests
+make -f tests/lispbm.mk /tmp/fa_lbm_runner
+LBM_TEST_RUNNER=/tmp/fa_lbm_runner python -m unittest discover -s tests
 """
 
 import os
