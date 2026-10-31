@@ -49,7 +49,7 @@
     led-show-battery-charging
     ; brightness
     led-brightness led-brightness-highbeam led-brightness-idle
-    led-brightness-status led-max-brightness led-dim-on-highbeam-ratio
+    led-brightness-status led-max-brightness led-dim-on-highbeam-ratio led-follow-refloat
     ; status
     led-status-pin led-status-num led-status-type led-status-white-output led-status-reversed
     led-status-timing
@@ -68,8 +68,11 @@
     led-button-pin led-button-timing
 ))
 
-(defun load-led-settings ()
-    (loopforeach k led-setting-keys (setvar k (get-config k))))
+(defun load-led-settings () {
+    (loopforeach k led-setting-keys (setvar k (get-config k)))
+    ; A config change must wait for a fresh reply before following the ESC.
+    (setq refloat-lcm-valid nil)
+})
 
 ; ---- Segment setup ------------------------------------------------------
 ; Chain state, rebuilt on every led-setup-segments. Module-level so the per-strip
@@ -793,16 +796,20 @@
     (setq can-activity-sec (secs-since can-last-activity-time))
 
     ; Mode and brightness. Later rules override earlier ones.
+    (var follow (refloat-brightness-active))
+    (var ride-bri (if follow refloat-lcm-brightness led-brightness))
+    (var idle-bri (if follow refloat-lcm-idle led-brightness-idle))
+    (var stat-bri (if follow refloat-lcm-status led-brightness-status))
     (setq current-led-mode led-mode)
-    (setq led-current-brightness (min led-brightness led-max-brightness))
+    (setq led-current-brightness (min ride-bri led-max-brightness))
     (if (= led-mall-grab 1)
-        (setq led-current-brightness (min led-brightness-status led-max-brightness)))
+        (setq led-current-brightness (min stat-bri led-max-brightness)))
     (if (and (>= last-activity-sec idle-timeout) (<= can-activity-sec 1)) {
         (setq current-led-mode led-mode-idle)
-        (setq led-current-brightness (min led-brightness-idle led-max-brightness))
+        (setq led-current-brightness (min idle-bri led-max-brightness))
     })
     (if (= state 5)
-        (setq led-current-brightness (min led-brightness-idle led-max-brightness)))
+        (setq led-current-brightness (min idle-bri led-max-brightness)))
     (if (and (<= (secs-since 0) led-startup-timeout) (not (running-state)))
         (setq current-led-mode led-mode-startup))
 
@@ -812,11 +819,11 @@
     (var highbeam-active (and (= led-on 1) (= led-highbeam-on 1) (running-state) (!= state 5)))
     (setq hb-front (and highbeam-active (>= direction 0) (> led-front-highbeam-mode 0)))
     (setq hb-rear (and highbeam-active (< direction 0) (> led-rear-highbeam-mode 0)))
-    (setq hb-frac (min led-brightness-highbeam led-max-brightness))
+    (setq hb-frac (min (if follow ride-bri led-brightness-highbeam) led-max-brightness))
 
     (setq front-bri (bri255 (* led-current-brightness (if hb-front led-dim-on-highbeam-ratio 1.0))))
     (setq rear-bri (bri255 (* led-current-brightness (if hb-rear led-dim-on-highbeam-ratio 1.0))))
-    (setq status-bri (bri255 (min led-brightness-status led-max-brightness)))
+    (setq status-bri (bri255 (min stat-bri led-max-brightness)))
     (setq aux-bri (bri255 led-current-brightness))
 
     ; head faces the direction of travel. Paired with its brightness, so the
@@ -866,6 +873,7 @@
             (dbg DBG-LED (str-merge "led bri " (str-from-n front-bri "%d")
                 " " (str-from-n rear-bri "%d")
                 " " (str-from-n status-bri "%d")
+                (if (refloat-brightness-active) " src refloat" " src local")
                 " dir " (str-from-n direction "%d")
                 " mg " (str-from-n led-mall-grab "%d")
                 " age " (str-from-n can-activity-sec "%.2f"))))

@@ -381,6 +381,20 @@ settings remain at RGB + W.
 
 ### Brightness levels
 
+**Follow Refloat Brightness** is off by default. When enabled, FA polls Refloat's
+external LCM interface at up to 10 Hz. Only a full, valid reply (external LCM
+control enabled in Refloat) activates following. Active, idle and status targets
+replace the corresponding local targets at runtime, with **Max Brightness** still
+applied. Mall grab uses the status target. FA's highbeam switch remains local;
+highbeam intensity follows Refloat's active target. Modes and direction remain
+controlled by FA.
+
+A disabled, malformed or out-of-range reply immediately restores local targets;
+one second without a valid reply also restores them. Saved local brightness
+settings are never overwritten. LED diagnostics include `src refloat` or
+`src local` in the periodic brightness report. Refloat's external LCM interface
+must be configured on the ESC; enabling this FA option alone does not activate it.
+
 Four settings, all fractions from 0 to 1, and all capped by **Max Brightness**:
 
 | Setting | Applies to |

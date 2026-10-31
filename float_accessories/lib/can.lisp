@@ -48,6 +48,7 @@
 (def float-cmds '(
     (COMMAND_GET_INFO . 0)
     (COMMAND_GET_ALLDATA . 10)
+    (COMMAND_LCM_POLL . 24)
     (COMMAND_HUMIDITY . 51)
 ))
 
@@ -58,6 +59,53 @@
 ))
 
 (def discover-can-id -1)
+
+; ---- Refloat external LCM brightness ------------------------------------
+; A full poll reply proves external LCM is configured; disabled replies contain
+; only magic + command. Cache runtime targets, never overwrite local config.
+(def refloat-lcm-valid nil)
+(def refloat-lcm-time 0)
+(def refloat-lcm-can-id -1)
+(def refloat-lcm-last-poll 0)
+(def refloat-lcm-brightness 0.0)
+(def refloat-lcm-idle 0.0)
+(def refloat-lcm-status 0.0)
+
+(defun refloat-brightness-active ()
+    (and (= led-follow-refloat 1) refloat-lcm-valid (not sim-active)
+         (= refloat-lcm-can-id can-id)
+         (< (secs-since refloat-lcm-time) 1.0)))
+
+(defun poll-refloat-brightness () {
+    (if (= led-follow-refloat 1) {
+        (if (>= (secs-since refloat-lcm-last-poll) 0.1) {
+            (setq refloat-lcm-last-poll (systime))
+            (float-cmd can-id (list (assoc float-cmds 'COMMAND_LCM_POLL)))
+        })
+    } {
+        (setq refloat-lcm-valid nil)
+    })
+})
+
+(defun refloat-brightness-rx (data) (atomic {
+    ; 2 header + 3 state + 6 telemetry + 3 brightness bytes. Extra payload
+    ; pairs belong to LCM extensions and are intentionally ignored here.
+    (setq refloat-lcm-valid nil)
+    (if (and (= led-follow-refloat 1) (>= (buflen data) 14)) {
+        (var ride (bufget-u8 data 11))
+        (var idle (bufget-u8 data 12))
+        (var status (bufget-u8 data 13))
+        (if (and (<= ride 100) (<= idle 100) (<= status 100)) {
+            (setq refloat-lcm-brightness (/ ride 100.0))
+            (setq refloat-lcm-idle (/ idle 100.0))
+            (setq refloat-lcm-status (/ status 100.0))
+            (setq refloat-lcm-time (systime))
+            (setq refloat-lcm-can-id can-id)
+            (setq refloat-lcm-valid t)
+        })
+    })
+}))
+; ---- End Refloat brightness ---------------------------------------------
 
 (defun running-state (){
     (let ret (and (>= state 1) (<= state 5)))
@@ -134,6 +182,7 @@
             ; nothing can ack.
             (if (>= can-id 0) {
                 (float-cmd can-id (list (assoc float-cmds 'COMMAND_GET_ALLDATA) 3))
+                (poll-refloat-brightness)
                 (if (and refloat-humidity (get-config 'humidity-enabled)) (float-cmd can-id (list (assoc float-cmds 'COMMAND_HUMIDITY) (to-byte hum))))
             })
 
@@ -469,6 +518,11 @@
 })
 
 (defun float-pkg-telemetry-rx (data) {
+    ; LCM replies must not make the motor telemetry appear fresh or participate
+    ; in ESC discovery. They only update the brightness cache.
+    (if (= (bufget-u8 data 1) (assoc float-cmds 'COMMAND_LCM_POLL)) {
+        (refloat-brightness-rx data)
+    } {
     (var time-since-last-can (- (systime) can-last-activity-time))
     (setq can-last-activity-time (systime))
     (match (cossa float-cmds (bufget-u8 data 1))
@@ -547,6 +601,7 @@
         })
         (_ nil)
     )
+    })
 })
 @const-end
 

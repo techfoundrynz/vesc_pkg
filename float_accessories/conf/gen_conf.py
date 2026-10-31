@@ -280,6 +280,11 @@ PARAMS = [
        "Channels used for deliberate white on RGBW strips. RGB + W preserves"
        " the existing output; coloured effects are unchanged.")
       for strip in ("front", "rear", "status", "footpad")],
+    ("led_follow_refloat", "Follow Refloat Brightness", (B,), 0,
+     "Use Refloat active, idle and status brightness only when external LCM"
+     " control is enabled and responding. Max Brightness still applies."
+     " Falls back to local brightness after one second without a valid reply."
+     " Highbeam switching remains local; its intensity follows active brightness."),
 ]
 
 GROUPS = [
@@ -293,7 +298,7 @@ GROUPS = [
                      "::sep::Behavior", "led_mall_grab_enabled",
                      "led_brake_light_enabled", "led_brake_light_min_amps",
                      "idle_timeout", "idle_timeout_shutoff",
-                     "::sep::Brightness", "led_brightness",
+                     "::sep::Brightness", "led_follow_refloat", "led_brightness",
                      "led_brightness_highbeam", "led_brightness_idle",
                      "led_brightness_status", "led_max_brightness",
                      "led_dim_on_highbeam_ratio",

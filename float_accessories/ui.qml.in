@@ -531,6 +531,7 @@ Item {
             idleTimeout.value = mCustomConf.getParamInt("idle_timeout")
             idleTimeoutShutoff.value = mCustomConf.getParamInt("idle_timeout_shutoff")
             ledBrightnessLoader.item.value = mCustomConf.getParamDouble("led_brightness")
+            ledFollowRefloat.checked = mCustomConf.getParamBool("led_follow_refloat")
             ledBrightnessHighbeamLoader.item.value = mCustomConf.getParamDouble("led_brightness_highbeam")
             ledBrightnessIdleLoader.item.value = mCustomConf.getParamDouble("led_brightness_idle")
             ledBrightnessStatusLoader.item.value = mCustomConf.getParamDouble("led_brightness_status")
@@ -2451,6 +2452,18 @@ Item {
                             ColumnLayout {
                                 anchors.fill: parent
                                 spacing: 10
+
+                                CheckBox {
+                                    id: ledFollowRefloat
+                                    text: "Follow Refloat Brightness"
+                                    checked: false
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: fieldLabelStyle.color
+                                    text: "Requires external LCM control in Refloat. Uses active, idle and status brightness while responding; otherwise uses local settings. Max Brightness still applies. Highbeam switching stays local; its intensity follows active brightness."
+                                }
 
                                 ColumnLayout {
                                     spacing: cardStyle.labelSpacing
@@ -5183,6 +5196,7 @@ Item {
         mCustomConf.updateParamInt("idle_timeout", idleTimeout.value)
         mCustomConf.updateParamInt("idle_timeout_shutoff", idleTimeoutShutoff.value)
         mCustomConf.updateParamDouble("led_brightness", parseFloat(ledBrightnessLoader.item.value).toFixed(2))
+        mCustomConf.updateParamBool("led_follow_refloat", ledFollowRefloat.checked)
         mCustomConf.updateParamDouble("led_brightness_highbeam", parseFloat(ledBrightnessHighbeamLoader.item.value).toFixed(2))
         mCustomConf.updateParamDouble("led_brightness_idle", parseFloat(ledBrightnessIdleLoader.item.value).toFixed(2))
         mCustomConf.updateParamDouble("led_brightness_status", parseFloat(ledBrightnessStatusLoader.item.value).toFixed(2))

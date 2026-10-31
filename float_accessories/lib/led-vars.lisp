@@ -60,6 +60,7 @@
 (def led-startup-timeout)
 (def led-dim-on-highbeam-ratio 0.0)
 (def led-max-brightness)
+(def led-follow-refloat 0)
 (def led-show-battery-charging 0)
 (def led-front-highbeam-pin)
 (def led-rear-highbeam-pin)
