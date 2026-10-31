@@ -3,7 +3,7 @@ PYTHON ?= python3
 LBM_TEST_RUNNER ?= /tmp/fa_lbm_runner
 
 # One binary per chip - native libs only run on the chip they were built for.
-ESP_TARGETS = esp32c3 esp32c6 esp32s3 esp32p4
+ESP_TARGETS = esp32c3 esp32s3
 
 # Single source of truth for the package version. It is stamped into the
 # generated README (build info) and into the About box in the UI.
@@ -26,7 +26,7 @@ conf/confparser.c conf/confparser.h conf/confxml.c conf/confxml.h conf/conf_defa
 # The esp_led_strip lib binaries are imported from ../lib_esp_led_strip -
 # build them there first.
 esp_led_libs:
-	$(MAKE) -C ../lib_esp_led_strip libs
+	$(MAKE) -C ../lib_esp_led_strip libs ESP_TARGETS="$(ESP_TARGETS)"
 
 fa_cfg_libs: conf/confparser.c fa_cfg/datatypes.h
 	for t in $(ESP_TARGETS); do \
@@ -72,6 +72,6 @@ clean:
 	for t in $(ESP_TARGETS); do \
 		$(MAKE) -C fa_cfg ESP_TARGET=$$t clean; \
 	done
-	$(MAKE) -C ../lib_esp_led_strip clean
+	$(MAKE) -C ../lib_esp_led_strip clean ESP_TARGETS="$(ESP_TARGETS)"
 
 .PHONY: all clean test esp_led_libs fa_cfg_libs

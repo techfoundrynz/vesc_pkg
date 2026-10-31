@@ -50,6 +50,24 @@
     (send-data (str-merge "status " text))
 )
 
+; VESC Express "Bluetooth Mode LBM" (saved value): 0 Disabled, 1 Server,
+; 2 Client, 3 Client & Server; -1 when the firmware has no such setting.
+(defun express-ble-role () {
+    (var role (trap (conf-get 'ble-mode-lbm)))
+    (if (and (eq (ix role 0) 'exit-ok) (number? (ix role 1))) (ix role 1) -1)
+})
+
+; Add the client role for SSBMS BLE, keeping Server when it is selected.
+; Saved to flash; the firmware applies Bluetooth roles after a reboot.
+(defun express-ble-enable-client () {
+    (var role (express-ble-role))
+    (if (or (= role 0) (= role 1)) {
+        (conf-set 'ble-mode-lbm (if (= role 1) 3 2))
+        (conf-store)
+        (send-status "Bluetooth role saved, reboot to apply")
+    })
+})
+
 (defun mklist (len val)
     (map (fn (x) val) (range len))
 )

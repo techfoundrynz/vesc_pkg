@@ -73,17 +73,26 @@ class NativeBmsTests(unittest.TestCase):
                     found=data.find(magic,start)
                     self.assertEqual(lib.ow_find_magic(array(data),len(data),start,array(magic)),len(data) if found<0 else found)
 
+CORE_FILES=["lib/utils.lisp", "lib/bms-vars.lisp", "lib/bms.lisp", "lib/bms-backend.lisp", "lib/adapters/ssbms.lisp"]
+
 class SsbmsTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("LBM_TEST_RUNNER"), "Set LBM_TEST_RUNNER")
     def test_uart_polling_mapping_staleness_and_stop(self):
+        self.run_lisp(CORE_FILES+["lib/adapters/ssbms-uart.lisp"], "tests/ssbms.lisp")
+
+    # ble-client-* and conf-get are not host builtins; the test defines fakes.
+    @unittest.skipUnless(os.environ.get("LBM_TEST_RUNNER"), "Set LBM_TEST_RUNNER")
+    def test_ble_link_reassembly_loss_and_cleanup(self):
+        self.run_lisp(CORE_FILES+["lib/adapters/ssbms-ble.lisp"], "tests/ssbms_ble.lisp")
+
+    def run_lisp(self, files, test):
         curves=(ROOT / "lib/vehicle.lisp").read_text()
         curves=curves[curves.index("(defun get-voltage-curve"):curves.index("; Provider callbacks:")]
-        files=["lib/utils.lisp", "lib/bms-vars.lisp", "lib/bms.lisp", "lib/bms-backend.lisp", "lib/adapters/ssbms.lisp"]
-        program="\n".join((ROOT / p).read_text() for p in files)+"\n"+curves+"\n"+(ROOT/"tests/ssbms.lisp").read_text()
+        program="\n".join((ROOT / p).read_text() for p in files)+"\n"+curves+"\n"+(ROOT/test).read_text()
         program=program.replace("@const-start", "").replace("@const-end", "")
         for old,new in [("systime","test-clock"),("secs-since","test-age"),("sleep","test-sleep"),
             ("uart-start","test-start"),("uart-stop","test-stop"),("uart-read","test-read"),
-            ("uart-write","test-write"),("can-local-id","test-id"),("can-send-eid","test-can")]:
+            ("uart-write","test-write"),("ext-facfg-store","test-store"),("can-local-id","test-id"),("can-send-eid","test-can")]:
             program=program.replace("("+old+" ","("+new+" ").replace("("+old+")","("+new+")")
         program=program.replace("(set-bms-val field value)","(test-value field value)")
         program=program.replace("(set-bms-val field index value)","(test-indexed field index value)")

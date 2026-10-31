@@ -250,6 +250,7 @@
         (str-from-n (gnss-hdop) "%.1f")
         (str-from-n (gnss-speed) "%.2f")
         (sysinfo 'hw-target)
+        (str-from-n (express-ble-role) "%d")
     ) " "))
 
     (if (= (is-pubmote-connected) 1) {

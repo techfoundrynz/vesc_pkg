@@ -284,15 +284,24 @@ PARAMS = [
      "Optional integration. Standalone disables ESC discovery, telemetry"
      " polling and remote-control forwarding. Local lighting and accessories"
      " remain available. Refloat preserves the existing integration."),
-    ("bms_backend", "BMS Backend", (E, ["None", "OW", "SSBMS UART"]), 0,
+    ("bms_backend", "BMS Backend", (E, ["None", "OW", "SSBMS UART", "SSBMS BLE"]), 0,
      "Select one BMS backend independently of the vehicle integration."
      " BMS Enabled must also be on; None starts no communications."
      " SSBMS UART polls read-only telemetry at 115200 baud; no"
-     " control commands are available."),
-    ("ssbms_rx_pin", "SSBMS UART RX Pin", (I, -1, 54, ""), -1,
+     " control commands are available. SSBMS BLE connects to the paired"
+     " BMS, or the first SSBMS/XJBMS found when none is paired, and needs the"
+     " VESC Express Bluetooth LispBM role set to Client."),
+    ("ssbms_ble_paired_address_a", "SSBMS BLE Paired Address A", (I, -2147483648, 2147483647, ""), 0,
+     "Paired SSBMS BLE address bytes 0-3, big-endian. Set by Connect in the"
+     " SSBMS BLE scan list of the package UI."),
+    ("ssbms_ble_paired_address_b", "SSBMS BLE Paired Address B", (I, -2147483648, 2147483647, ""), 0,
+     "Paired SSBMS BLE address bytes 4-5, then address type (0 public,"
+     " 1 random), then 1 when paired. 0 means not paired (first found). Set"
+     " by Connect in the SSBMS BLE scan list of the package UI."),
+    ("ssbms_uart_rx_pin", "SSBMS UART RX Pin", (I, -1, 54, ""), -1,
      "ESP UART receive GPIO, connected to SSBMS TX. -1 means unassigned."
      " SSBMS uses UART 1 at 115200 baud (8N1)."),
-    ("ssbms_tx_pin", "SSBMS UART TX Pin", (I, -1, 54, ""), -1,
+    ("ssbms_uart_tx_pin", "SSBMS UART TX Pin", (I, -1, 54, ""), -1,
      "ESP UART transmit GPIO, connected to SSBMS RX. -1 means unassigned."
      " SSBMS uses UART 1 at 115200 baud (8N1)."),
 ]
@@ -336,7 +345,8 @@ GROUPS = [
         ("Pubmote", ["pubmote_loop_delay",
                     "::sep::Paired Remote", "pubmote_remote_mac_a",
                     "pubmote_remote_mac_b", "pubmote_secret_code"]),
-        ("BMS", ["bms_backend", "::sep::SSBMS UART", "ssbms_rx_pin", "ssbms_tx_pin",
+        ("BMS", ["bms_backend", "::sep::SSBMS UART", "ssbms_uart_rx_pin", "ssbms_uart_tx_pin",
+                "::sep::SSBMS BLE", "ssbms_ble_paired_address_a", "ssbms_ble_paired_address_b",
                  "::sep::OW BMS Comms", "bms_type", "bms_rs485_chip", "bms_rs485_di_pin",
                  "bms_rs485_ro_pin", "bms_rs485_dere_pin",
                  "bms_wakeup_pin", "bms_override_soc",

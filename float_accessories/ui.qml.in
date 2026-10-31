@@ -245,7 +245,8 @@ Item {
     property int floatAccessoriesMagic: 102
     property bool acceptTOS: false
     readonly property bool owBmsEnabled: bmsEnabled.checked && bmsBackend.currentIndex === 1
-    readonly property bool ssbmsSelected: bmsEnabled.checked && bmsBackend.currentIndex === 2
+    readonly property bool ssbmsUartSelected: bmsEnabled.checked && bmsBackend.currentIndex === 2
+    readonly property bool ssbmsBleSelected: bmsEnabled.checked && bmsBackend.currentIndex === 3
     property int lastStatusTime: 0
     property bool statusTimeout: true
     property string gpioTarget: ""
@@ -280,8 +281,8 @@ Item {
             ["OW BMS RO", bmsRs485ROPin.value],
             ["OW BMS DE/RE", bmsRs485DEREPin.value],
             ["BMS wakeup", bmsWakeupPin.value],
-            ["SSBMS RX", ssbmsRxPin.value],
-            ["SSBMS TX", ssbmsTxPin.value],
+            ["SSBMS UART RX", ssbmsUartRxPin.value],
+            ["SSBMS UART TX", ssbmsUartTxPin.value],
             ["Humidity SDA", humiditySdaPin.value],
             ["Humidity SCL", humiditySlcPin.value],
             ["GNSS RX", gnssRxPin.value],
@@ -516,6 +517,46 @@ Item {
     readonly property int faConfigIndex: 1
     property ConfigParams mCustomConf: VescIf.customConfig(faConfigIndex)
 
+    // VESC Express "Bluetooth Mode LBM", reported by Lisp in float-stats:
+    // -2 not received yet, -1 firmware without the setting, otherwise
+    // 0 Disabled, 1 Server, 2 Client, 3 Client & Server. SSBMS BLE needs Client.
+    property int expressBleRole: -2
+    property bool expressBleRebootPending: false
+
+    // SSBMS BLE pinning. The address is packed into two config ints: bytes 0-3,
+    // then bytes 4-5, address type (0 public, 1 random) and 1 when pinned.
+    property int ssbmsBleAddressA: 0
+    property int ssbmsBleAddressB: 0
+    readonly property bool ssbmsBlePinned: (ssbmsBleAddressB & 255) === 1
+    property bool ssbmsBleScanning: false
+    property string ssbmsBleScanMessage: ""
+    property bool ssbmsBleLinkConnected: false
+    property int ssbmsBleLinkA: 0
+    property int ssbmsBleLinkB: 0
+    property int ssbmsBleRssi: 0
+    ListModel { id: ssbmsBleFound }
+
+    function formatBleAddress(a, b) {
+        var bytes = [(a >>> 24) & 255, (a >>> 16) & 255, (a >>> 8) & 255, a & 255,
+                     (b >>> 24) & 255, (b >>> 16) & 255]
+        return bytes.map(function (x) { return (x < 16 ? "0" : "") + x.toString(16).toUpperCase() }).join(":")
+            + (((b >>> 8) & 255) === 1 ? " (random)" : "")
+    }
+
+    // Lisp answers with ssbms-scan-done; this only covers a backend that never does.
+    Timer {
+        id: ssbmsBleScanTimer
+        interval: 15000
+        onTriggered: {
+            if (ssbmsBleScanning) {
+                ssbmsBleScanning = false
+                ssbmsBleScanMessage = "No answer from the SSBMS BLE backend."
+            }
+        }
+    }
+    readonly property bool expressBleClientMissing: expressBleRole === 0 || expressBleRole === 1
+    readonly property var expressBleRoleNames: ["Disabled", "Server", "Client", "Client & Server"]
+
         // VESC Tool rebuilds its ConfigParams object on every settings read, so a
         // binding onto it goes stale; these are re-read on each connect instead.
     Connections {
@@ -574,8 +615,10 @@ Item {
             ledEnabled.checked = mCustomConf.getParamBool("led_enabled")
             bmsEnabled.checked = mCustomConf.getParamBool("bms_enabled")
             bmsBackend.currentIndex = mCustomConf.getParamEnum("bms_backend")
-            ssbmsRxPin.value = mCustomConf.getParamInt("ssbms_rx_pin")
-            ssbmsTxPin.value = mCustomConf.getParamInt("ssbms_tx_pin")
+            ssbmsUartRxPin.value = mCustomConf.getParamInt("ssbms_uart_rx_pin")
+            ssbmsUartTxPin.value = mCustomConf.getParamInt("ssbms_uart_tx_pin")
+            ssbmsBleAddressA = mCustomConf.getParamInt("ssbms_ble_paired_address_a")
+            ssbmsBleAddressB = mCustomConf.getParamInt("ssbms_ble_paired_address_b")
             pubmoteEnabled.checked = mCustomConf.getParamBool("pubmote_enabled")
             ledOn.checked = mCustomConf.getParamBool("led_on")
             ledHighbeamOn.checked = mCustomConf.getParamBool("led_highbeam_on")
@@ -1803,7 +1846,8 @@ Item {
                             wrapMode: Text.WordWrap
                             color: statusSummary.severityColor(statusSummary.bmsSeverity)
                             text: bmsBackend.currentIndex === 0 ? "BMS: No backend selected"
-                                : (ssbmsSelected ? "SSBMS UART: " : "OW BMS: ")
+                                : (ssbmsBleSelected && expressBleClientMissing) ? "SSBMS BLE: Express Bluetooth LispBM role must include Client"
+                                : (ssbmsUartSelected ? "SSBMS UART: " : (ssbmsBleSelected ? "SSBMS BLE: " : "OW BMS: "))
                                     + (statusTimeout ? "Unknown" : (bmsConnected ? "Connected" : "Not Connected"))
                             visible: bmsEnabled.checked
                         }
@@ -2450,7 +2494,7 @@ Item {
                     GroupBox {
                         title: "BMS Info"
                         Layout.fillWidth: true
-                        visible: (owBmsEnabled || ssbmsSelected) && bmsConnected === 1
+                        visible: (owBmsEnabled || ssbmsUartSelected || ssbmsBleSelected) && bmsConnected === 1
                         background: Loader { sourceComponent: cardBg }
                         label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "BMS Info" }
                         topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
@@ -4097,7 +4141,7 @@ Item {
                                     id: bmsBackend
                                     Layout.fillWidth: true
                                     Layout.minimumWidth: 0
-                                    model: ["None", "OW", "SSBMS UART"]
+                                    model: ["None", "OW", "SSBMS UART", "SSBMS BLE"]
                                 }
                                 Text {
                                     Layout.fillWidth: true
@@ -4111,7 +4155,7 @@ Item {
                         GroupBox {
                             title: "SSBMS UART"
                             Layout.fillWidth: true
-                            visible: ssbmsSelected
+                            visible: ssbmsUartSelected
                             background: Loader { sourceComponent: cardBg }
                             label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "SSBMS UART" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
@@ -4132,7 +4176,7 @@ Item {
                                         text: "ESP RX Pin (SSBMS TX)"
                                     }
                                     SpinBox {
-                                        id: ssbmsRxPin
+                                        id: ssbmsUartRxPin
                                         from: -1
                                         to: 100
                                         value: -1
@@ -4149,13 +4193,137 @@ Item {
                                         text: "ESP TX Pin (SSBMS RX)"
                                     }
                                     SpinBox {
-                                        id: ssbmsTxPin
+                                        id: ssbmsUartTxPin
                                         from: -1
                                         to: 100
                                         value: -1
                                         editable: true
                                     }
 
+                                }
+                            }
+                        }
+                        GroupBox {
+                            title: "SSBMS BLE"
+                            Layout.fillWidth: true
+                            visible: ssbmsBleSelected
+                            background: Loader { sourceComponent: cardBg }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "SSBMS BLE" }
+                            topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
+                            ColumnLayout {
+                                anchors.fill: parent
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: fieldLabelStyle.color
+                                    text: "Read-only Bluetooth link to the paired SSBMS or XJBMS, or the first one found when none is paired; it reconnects automatically. Requires VESC Express > Bluetooth > LispBM role set to Client or Client and server, then a reboot. Keep any other BMS app disconnected, because the BMS accepts one connection. SoC is estimated from the lowest cell using Cell Type in State of Charge Reporting."
+                                }
+                                // One line for paired x connected, so a paired BMS that is
+                                // out of range or off still shows, next to Forget.
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    readonly property string linkText: ssbmsBleLinkConnected
+                                        ? formatBleAddress(ssbmsBleLinkA, ssbmsBleLinkB) + " (" + ssbmsBleRssi + " dBm)" : ""
+                                    color: ssbmsBleLinkConnected && ssbmsBlePinned ? statusSummary.okColor : statusSummary.warnColor
+                                    text: ssbmsBlePinned
+                                        ? (ssbmsBleLinkConnected
+                                            ? "Paired BMS connected: " + linkText
+                                            : "Paired BMS " + formatBleAddress(ssbmsBleAddressA, ssbmsBleAddressB)
+                                              + " is not connected. Wake the BMS and disconnect any phone app, or Forget it to pair another.")
+                                        : (ssbmsBleLinkConnected
+                                            ? "Connected to the first BMS found, not paired: " + linkText + ". Connect to it below to pair it."
+                                            : "No BMS paired: the first SSBMS or XJBMS found is used. Scan and connect to your pack so a nearby battery is never used for ESC limits.")
+                                }
+                                RowLayout {
+                                    Button {
+                                        text: ssbmsBleScanning ? "Scanning..." : "Scan"
+                                        enabled: !ssbmsBleScanning
+                                        onClicked: {
+                                            ssbmsBleFound.clear()
+                                            ssbmsBleScanMessage = ""
+                                            ssbmsBleScanning = true
+                                            ssbmsBleScanTimer.restart()
+                                            sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(ssbms-ble-request-scan)")
+                                        }
+                                    }
+                                    Button {
+                                        text: "Forget"
+                                        visible: ssbmsBlePinned
+                                        onClicked: sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(ssbms-ble-select 0 0)")
+                                    }
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: fieldLabelStyle.color
+                                    visible: ssbmsBleScanning
+                                    text: "Scanning for 5 seconds. The current BMS link drops while scanning and reconnects afterwards."
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: statusSummary.warnColor
+                                    visible: ssbmsBleScanMessage !== ""
+                                    text: ssbmsBleScanMessage
+                                }
+                                Repeater {
+                                    model: ssbmsBleFound
+                                    delegate: RowLayout {
+                                        Layout.fillWidth: true
+                                        Text {
+                                            Layout.fillWidth: true
+                                            wrapMode: Text.WordWrap
+                                            color: fieldLabelStyle.color
+                                            text: model.name + "  " + formatBleAddress(model.a, model.b) + "  " + model.rssi + " dBm"
+                                        }
+                                        Button {
+                                            readonly property bool current: model.a === ssbmsBleAddressA && model.b === ssbmsBleAddressB
+                                            readonly property bool linked: ssbmsBleLinkConnected && model.a === ssbmsBleLinkA && model.b === ssbmsBleLinkB
+                                            text: linked ? "Connected" : (current ? "Connecting..." : "Connect")
+                                            enabled: !current && !ssbmsBleScanning
+                                            onClicked: sendCode(String.fromCharCode(102) + String.fromCharCode(1)
+                                                + "(ssbms-ble-select " + model.a + " " + model.b + ")")
+                                        }
+                                    }
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    visible: expressBleClientMissing
+                                    color: statusSummary.errColor
+                                    text: "The VESC Express Bluetooth LispBM role is " + (expressBleClientMissing ? expressBleRoleNames[expressBleRole] : "")
+                                        + ", so SSBMS BLE cannot connect. It must be Client or Client & Server."
+                                }
+                                Button {
+                                    visible: expressBleClientMissing
+                                    text: expressBleRole === 1 ? "Set Role to Client & Server" : "Set Role to Client"
+                                    onClicked: {
+                                        sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(express-ble-enable-client)")
+                                        expressBleRebootPending = true
+                                    }
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    visible: expressBleRole === -1
+                                    color: statusSummary.errColor
+                                    text: "This VESC Express firmware has no LispBM Bluetooth client. Update the firmware to use SSBMS BLE."
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    visible: expressBleRebootPending
+                                    color: statusSummary.warnColor
+                                    text: "Bluetooth role saved. Reboot the VESC Express for it to take effect."
+                                }
+                                Button {
+                                    visible: expressBleRebootPending
+                                    text: "Reboot VESC Express"
+                                    onClicked: {
+                                        expressBleRebootPending = false
+                                        sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(reboot)")
+                                    }
                                 }
                             }
                         }
@@ -4794,7 +4962,7 @@ Item {
 
                             ColumnLayout {
                                 spacing: cardStyle.labelSpacing
-                                visible: voltageCurveSoc.checked || ssbmsSelected
+                                visible: voltageCurveSoc.checked || ssbmsUartSelected || ssbmsBleSelected
                                 Layout.fillWidth: true
                                 Text {
                                     color: fieldLabelStyle.color
@@ -5060,6 +5228,15 @@ Item {
 
                     writeConfigToParams()
                     mCommands.customConfigSet(faConfigIndex, mCustomConf)
+
+                    if (ssbmsBleSelected && (expressBleClientMissing || expressBleRole === -1)) {
+                        VescIf.emitMessageDialog("SSBMS BLE",
+                            expressBleRole === -1
+                                ? "Config saved, but this VESC Express firmware has no LispBM Bluetooth client, so SSBMS BLE cannot connect."
+                                : "Config saved, but the VESC Express Bluetooth LispBM role is " + expressBleRoleNames[expressBleRole]
+                                  + ". Use Set Role on the SSBMS BLE card, or set it under VESC Express > Bluetooth, then reboot.",
+                            false, false)
+                    }
 
                     //sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(save-config)")
                     //mCommands.customConfigGet(faConfigIndex, false)
@@ -5334,8 +5511,10 @@ Item {
         mCustomConf.updateParamBool("led_enabled", ledEnabled.checked)
         mCustomConf.updateParamBool("bms_enabled", bmsEnabled.checked)
         mCustomConf.updateParamEnum("bms_backend", bmsBackend.currentIndex)
-        mCustomConf.updateParamInt("ssbms_rx_pin", ssbmsRxPin.value)
-        mCustomConf.updateParamInt("ssbms_tx_pin", ssbmsTxPin.value)
+        mCustomConf.updateParamInt("ssbms_uart_rx_pin", ssbmsUartRxPin.value)
+        mCustomConf.updateParamInt("ssbms_uart_tx_pin", ssbmsUartTxPin.value)
+        mCustomConf.updateParamInt("ssbms_ble_paired_address_a", ssbmsBleAddressA)
+        mCustomConf.updateParamInt("ssbms_ble_paired_address_b", ssbmsBleAddressB)
         mCustomConf.updateParamBool("pubmote_enabled", pubmoteEnabled.checked)
         mCustomConf.updateParamBool("led_on", ledOn.checked)
         mCustomConf.updateParamBool("led_highbeam_on", ledHighbeamOn.checked)
@@ -5674,6 +5853,10 @@ Item {
 
                 gpioTarget = tokens.length > 17
                     ? tokens[17].replace(/\0/g, "").trim().toLowerCase() : ""
+                // parseInt stops at the trailing NUL of the last token.
+                if (tokens.length > 18) {
+                    expressBleRole = parseInt(tokens[18], 10)
+                }
 
                 // Update status flags
                 lastStatusTime = 0  // Reset the timer when status is received
@@ -5690,6 +5873,33 @@ Item {
                 }
 
                 statusTimeout = false
+            } else if (str.startsWith("ssbms-found ")) {
+                var found = str.replace(/\0/g, "").split(" ")
+                ssbmsBleFound.append({ a: parseInt(found[1], 10), b: parseInt(found[2], 10),
+                                       rssi: parseInt(found[3], 10), name: found.slice(4).join(" ") })
+            } else if (str.startsWith("ssbms-scan-done ")) {
+                var count = parseInt(str.split(" ")[1], 10)
+                ssbmsBleScanning = false
+                ssbmsBleScanMessage = count < 0
+                    ? "Save Config with BMS Enabled and SSBMS BLE selected, then scan."
+                    : (count === 0 ? "No SSBMS or XJBMS found. Disconnect any phone app and wake the BMS." : "")
+            } else if (str.startsWith("ssbms-ble-selected ")) {
+                var selected = str.replace(/\0/g, "").split(" ")
+                if (selected[1] === "1") {
+                    ssbmsBleAddressA = parseInt(selected[2], 10)
+                    ssbmsBleAddressB = parseInt(selected[3], 10)
+                    mCustomConf.updateParamInt("ssbms_ble_paired_address_a", ssbmsBleAddressA)
+                    mCustomConf.updateParamInt("ssbms_ble_paired_address_b", ssbmsBleAddressB)
+                    ssbmsBleScanMessage = ""
+                } else {
+                    ssbmsBleScanMessage = "Could not save the BMS selection (test mode blocks config writes)."
+                }
+            } else if (str.startsWith("ssbms-ble-link ")) {
+                var link = str.replace(/\0/g, "").split(" ")
+                ssbmsBleLinkConnected = link[1] === "1"
+                ssbmsBleLinkA = parseInt(link[2], 10)
+                ssbmsBleLinkB = parseInt(link[3], 10)
+                ssbmsBleRssi = parseInt(link[4], 10)
             } else if (str.startsWith("control")) {
                 var tokens = str.split(" ")
                 ledOn.checked = Number(tokens[1])

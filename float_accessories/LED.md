@@ -460,88 +460,18 @@ from 0 to 1. Overrides expire after one second and are released on provider
 selection changes. They never persist settings. The Refloat adapter accepts
 these values only from a full LCM reply proving external LCM is enabled.
 
-For a package with no Refloat code, omit the adapter's `import` and
-`read-eval-program` lines in `float_accessories.lisp`. No core module references
+For a package with no Refloat code, omit the adapter's `import` line in
+`float_accessories.lisp` and its `read-eval-program` line in
+`lib/entry/vehicle.lisp`. No core module references
 adapter symbols. An unavailable provider falls back to standalone. This is a
 bundled adapter interface; separate runtime plugin installation and a public
 lighting wire protocol are not implemented by this extraction.
 
-### BMS backends
+### BMS
 
-The BMS enable flag remains separate from `bms_backend`: **None** (0, default),
-**OW** (1) or **SSBMS UART** (2). Config → BMS contains the backend selector,
-OW-specific settings, and SSBMS RX/TX GPIO settings. The SSBMS pins default to
--1 (unassigned); ESP RX connects to SSBMS TX and ESP TX to SSBMS RX. With BMS
-disabled or None selected, no BMS worker starts. Backend switching waits for
-the old worker to release its UART; a timeout prevents starting a second owner.
-This backend selection is independent of the main integration setting.
-
-SSBMS uses UART 1 at 115200 baud, 8 data bits, no parity, one stop bit. The
-user confirmed its BLE module is a UART bridge using identical frames. Pin
-configuration must assign distinct RX/TX GPIOs. A GNSS configuration sharing
-UART 1, or using the global Lisp UART API for NMEA on any port, prevents SSBMS
-from starting. u-blox on a different UART is independent.
-
-The adapter reads the cell count (12–32), then complete cells + 16-register
-status cycles twice per second. There is one read outstanding at a time, a
-300 ms request timeout, and bounded nonblocking UART reads. Native scanning
-accepts only CRC-valid replies with the requested register and byte count,
-including fragmented/noisy UART input. Metadata or a partial cycle cannot mark
-a connection fresh or trigger a CAN broadcast. After three seconds without a
-complete snapshot the connection expires and cell count discovery restarts.
-
-Published data includes cells, sum/min/max voltage, MOSFET and battery
-temperatures, charging current (negative in VESC convention), charge-allowed,
-and normalized faults/charging. SoC is estimated from the lowest cell using
-the configured Cell Type curve. No discharge-current sensor, SoH, battery
-model, cycle count or energy counters are documented; unavailable counters and
-SoH are zero, model/cycles stay unknown. The global balancing flag is carried
-in CAN status; individual balancing cells are not fabricated. Protection,
-factory, pairing and storage-mode writes are not exposed.
-
-SSBMS CAN publication uses the shared `bms-broadcast` helper so charging and
-balancing flags are accurate despite firmware 7.00 lacking corresponding Lisp
-setters. It emits the VESC BMS packets, contiguous cell/temperature sequences,
-and firmware-compatible float32_auto values only for fresh snapshots.
-
-The protocol is based on the Indy Speed Control 3.8 reverse-engineering spec
-(2026-10-31), including its verified CRC/frame vectors. Register scaling and
-current sign still need testing with an actual SSBMS.
-
-`lib/bms.lisp` is the shared service: connection freshness, normalized status,
-charging detection, and public commands. `lib/bms-backend.lisp` owns selection
-and worker lifecycle. OW framing, encryption, pairing, UART pins and buffers
-live in `lib/adapters/ow-bms.lisp` and `ow-bms-vars.lisp`.
-
-A backend registers `(bms-register id run request-stop cleanup command capabilities)`.
-Imports only register callbacks; buffers and hardware are acquired by `run`.
-`request-stop` must wake or cancel the worker promptly; `cleanup` releases its
-resources before the manager acknowledges shutdown. Failed cleanup prevents a
-replacement from taking ownership. Adapters remain statically imported; only
-the enabled, selected backend runs. Removing an adapter's import/evaluation
-lines leaves the service usable; selecting an unavailable backend starts no worker.
-
-Adapters publish scalar/indexed VESC BMS values through `bms-publish-value` and
-`bms-publish-indexed`, metadata through `bms-publish-info`, and normalized flags
-through `bms-publish-status`. They call `bms-mark-received` only after validating
-and processing a complete packet/snapshot. Default freshness is one second;
-SSBMS requests three seconds through `bms-set-freshness`. Freshness does not
-depend on receiving OW status flags. Publication from a backend
-that no longer owns the service is ignored.
-
-The shared command API is `bms-request-charge`, `bms-request-factory-init`, and
-`bms-pair`. Capability bits gate charge control (1), factory initialization (2)
-and pairing (4); unsupported commands return nil. SSBMS advertises no write
-capabilities. Protocol branches remain in adapters rather than settings, vehicle
-state or the CAN loop.
-
-Native sources live under `native/ssbms/` (XMODEM CRC, read-frame building and
-stream validation), `native/ow_bms/` (FM/OW checksum and marker scanning), and
-`native/bms_extensions.c` (checked Lisp wrappers and CAN float encoding). They
-link into the existing FA native image built by `fa_cfg/Makefile`; there is no
-additional library allocation. OW AES already runs in firmware C; lifecycle,
-polling, settings and command sequencing remain in its Lisp adapter.
-
+BMS backends, the SSBMS UART/BLE transports and the shared BMS service are
+documented in [`BMS.md`](BMS.md). A fresh BMS can supply the battery gauge and
+charging display described here.
 
 ### Host regression tests
 

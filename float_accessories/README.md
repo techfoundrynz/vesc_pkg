@@ -21,8 +21,9 @@ My Blog: <a href='https://sylerclayton.com'>https://sylerclayton.com</a>
 <H3>Release Notes</H3>
 
 <ul>
+  <li>Native libraries are bundled for ESP32-C3 and ESP32-S3 only, to leave flash for the startup image. Other chips report an unsupported-target error.</li>
   <li>New LED backend</li>
-  <li>SSBMS UART support at 115200 baud with configurable RX/TX pins: read-only cell, temperature and charging telemetry, estimated SoC, and VESC BMS CAN reporting.</li>
+  <li>SSBMS support over UART (115200 baud, configurable RX/TX pins) or BLE (VESC Express LispBM BLE client; set the Express Bluetooth LispBM role to Client): read-only cell, temperature and charging telemetry, estimated SoC, and VESC BMS CAN reporting.</li>
   <li>Standalone mode runs local lighting and accessories without Refloat discovery, telemetry polling or remote-control forwarding.</li>
   <li>GNSS receiver support (u-blox or NMEA over UART) - feeds the SD log position and the CAN GNSS broadcast</li>
   <li>Diagnostics card on the Config tab: per-area verbose logging plus a one-shot system report. The flag is held in RAM only, so it never persists and resets on reboot.</li>

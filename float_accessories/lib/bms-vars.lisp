@@ -3,7 +3,8 @@
 ; Shared BMS state and backend IDs. Protocol-specific globals live in adapters.
 (def BMS-BACKEND-NONE 0)
 (def BMS-BACKEND-OW 1)
-(def BMS-BACKEND-SSBMS 2)
+(def BMS-BACKEND-SSBMS-UART 2)
+(def BMS-BACKEND-SSBMS-BLE 3)
 (def BMS-CAP-CHARGE 1)
 (def BMS-CAP-FACTORY 2)
 (def BMS-CAP-PAIRING 4)

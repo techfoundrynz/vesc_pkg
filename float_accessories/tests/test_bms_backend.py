@@ -14,7 +14,8 @@ class BmsBackendTests(unittest.TestCase):
         files = ["lib/utils.lisp", "lib/settings-vars.lisp", "lib/settings.lisp",
                  "lib/vehicle.lisp", "lib/lighting-control.lisp",
                  "lib/bms-vars.lisp", "lib/bms.lisp", "lib/bms-backend.lisp",
-                 "lib/adapters/ssbms.lisp", "tests/bms_backend.lisp"]
+                 "lib/adapters/ssbms.lisp", "lib/adapters/ssbms-uart.lisp",
+                 "tests/bms_backend.lisp"]
         program = "\n".join((ROOT / path).read_text() for path in files)
         program = program.replace("@const-start", "").replace("@const-end", "")
         for old, new in [("systime", "test-clock"), ("secs-since", "test-age"),

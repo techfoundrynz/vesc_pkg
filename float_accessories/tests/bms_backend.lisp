@@ -65,7 +65,7 @@
 (expect uart-stops 1)
 
 ; SSBMS with unconfigured pins clears stale OW status without opening UART.
-(setq backend BMS-BACKEND-SSBMS)
+(setq backend BMS-BACKEND-SSBMS-UART)
 (setq bms-status 0)
 (setq bms-last-activity-time (test-clock))
 (setq bms-is-charging t)
