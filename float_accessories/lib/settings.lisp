@@ -151,7 +151,7 @@
 
 ; Poll for config writes from VESC Tool and apply them.
 (defun config-watch-loop ()
-    (loopwhile t {
+    (loop () t {
         (if (ext-facfg-changed) {
             (dbg DBG-CFG "cfg changed in VESC Tool")
             (send-status "Settings updated")
@@ -222,6 +222,8 @@
 })
 
 (defun status () {
+    ; Retry the creation notice until QML sees it, including a late-loaded UI.
+    (if startup-image-created (send-data "fa-image-created"))
       ; Built as a list and joined once: accumulating with str-merge copies the
       ; growing string every step, which at the QML poll rate was the main source
       ; of lbm memory churn between GC cycles.
@@ -258,15 +260,41 @@
     })
 })
 
+; On-demand SSBMS preview. A saved BLE peer or partial reply is not telemetry.
+; Header: backend, age (negative when unavailable), V, SoC, A, T1, T2, MOS,
+; charge-allowed, status, cell count, then one voltage per cell.
+(defun ssbms-state () {
+    (var active (and (or (= bms-active-backend BMS-BACKEND-SSBMS-UART)
+        (= bms-active-backend BMS-BACKEND-SSBMS-BLE)) (bms-backend-active bms-active-backend)))
+    (if (and active bms-valid) {
+        (var count (min 32 (max 0 (get-bms-val 'bms-cell-num))))
+        (var cells nil)
+        (looprange i 0 count
+            (setq cells (cons (str-from-n (get-bms-val 'bms-v-cell i) "%.3f") cells)))
+        (send-data (str-join (append (list "ssbms-state"
+            (str-from-n bms-active-backend "%d")
+            (str-from-n (secs-since bms-last-activity-time) "%.1f")
+            (str-from-n (get-bms-val 'bms-v-tot) "%.2f")
+            (str-from-n (* 100.0 (bms-soc)) "%.1f")
+            (str-from-n (get-bms-val 'bms-i-in) "%.2f")
+            (str-from-n (get-bms-val 'bms-temps-adc 0) "%.1f")
+            (str-from-n (get-bms-val 'bms-temps-adc 1) "%.1f")
+            (str-from-n (get-bms-val 'bms-temp-ic) "%.1f")
+            (str-from-n (get-bms-val 'bms-chg-allowed) "%d")
+            (str-from-n bms-status "%d")
+            (str-from-n count "%d")) (reverse cells)) " "))
+    } (send-data (str-merge "ssbms-state " (str-from-n (if active bms-active-backend 0) "%d") " -1")))
+})
+
 (defun input-state () {
     (send-data (str-join (list
         "input-state"
         (str-from-n (is-pubmote-connected) "%d")
-        (str-from-n pubmote-last-jsy "%.3f")
-        (str-from-n pubmote-last-jsx "%.3f")
-        (str-from-n pubmote-last-bt-c "%d")
-        (str-from-n pubmote-last-bt-z "%d")
-        (str-from-n pubmote-last-is-rev "%d")
+        (str-from-n remote-last-jsy "%.3f")
+        (str-from-n remote-last-jsx "%.3f")
+        (str-from-n remote-last-bt-c "%d")
+        (str-from-n remote-last-bt-z "%d")
+        (str-from-n remote-last-is-rev "%d")
     ) " "))
 })
 

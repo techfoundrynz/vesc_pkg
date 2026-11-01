@@ -6,3 +6,4 @@
 (read-eval-program utils)
 (read-eval-program settings-vars)
 (read-eval-program settings)
+(read-eval-program ble-client)

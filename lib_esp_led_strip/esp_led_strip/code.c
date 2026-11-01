@@ -858,6 +858,12 @@ static lbm_value ext_seg_def(lbm_value *args, lbm_uint argn) {
 	}
 
 	VESC_IF->mutex_lock(st->lock);
+	if (s->manual) { // redefining drops any custom-mode buffer
+		VESC_IF->free(s->manual);
+	}
+	// Redefinition resets the whole appearance, overlays and custom palette.
+	// The pin-group index is assigned again by ext_init.
+	memset(s, 0, sizeof(*s));
 	s->defined = true;
 	s->on = true;
 	s->pin = (uint8_t)pin;
@@ -865,29 +871,11 @@ static lbm_value ext_seg_def(lbm_value *args, lbm_uint argn) {
 	s->timing = (uint8_t)timing;
 	s->len = (uint16_t)len;
 	s->offset = (uint16_t)offset;
-	s->reverse = false;
-	s->auto_white = false;
 	s->fx = FX_SOLID;
 	s->pal = 1; // Spectrum (0 is the custom palette, empty by default)
-	s->bri = 0;
-	s->bri_cur = 0;
 	s->spd = esp_led_SPD_DEF;
 	s->size = 8;
 	s->fx_val = 255;
-	s->color = 0;
-	s->color_cur = 0;
-	s->color_fade = 0;
-	s->phase = 0;
-	s->phase_rem = 0;
-	s->cycle_ms = 0;
-	s->ov_count = 0;
-	s->ov_color = 0;
-	s->ov_bri = 0;
-	s->cpal[0] = 0; s->cpal[1] = 0; s->cpal[2] = 0; s->cpal[3] = 0;
-	if (s->manual) { // redefining drops any custom-mode buffer
-		VESC_IF->free(s->manual);
-		s->manual = NULL;
-	}
 	VESC_IF->mutex_unlock(st->lock);
 
 	return VESC_IF->lbm_enc_sym_true;
@@ -943,6 +931,27 @@ static lbm_value ext_seg_overlay(lbm_value *args, lbm_uint argn) {
 
 	return VESC_IF->lbm_enc_sym_true;
 }
+
+// Shared by partial initialization failure and normal shutdown.
+static void free_render_buffers(esp_led_t *st) {
+	if (st->work) {
+		VESC_IF->free(st->work);
+		st->work = NULL;
+	}
+	for (int gi = 0; gi < st->group_count; gi++) {
+		group_t *g = &st->group[gi];
+		for (int b = 0; b < 2; b++) {
+			if (g->txbuf[b]) {
+				VESC_IF->free(g->txbuf[b]);
+				g->txbuf[b] = NULL;
+			}
+		}
+	}
+	st->group_count = 0;
+	st->seg_count = 0;
+	st->buf_len = 0;
+}
+
 
 // (ext-esp_led-init n) - start rendering the first n segments.
 static lbm_value ext_init(lbm_value *args, lbm_uint argn) {
@@ -1080,18 +1089,7 @@ static lbm_value ext_init(lbm_value *args, lbm_uint argn) {
 		for (int gi = 0; gi < registered; gi++) {
 			VESC_IF->rgbled_deinit(st->group[gi].pin);
 		}
-		if (st->work) { VESC_IF->free(st->work); st->work = NULL; }
-		for (int gi = 0; gi < st->group_count; gi++) {
-			for (int b = 0; b < 2; b++) {
-				if (st->group[gi].txbuf[b]) {
-					VESC_IF->free(st->group[gi].txbuf[b]);
-					st->group[gi].txbuf[b] = NULL;
-				}
-			}
-		}
-		st->group_count = 0;
-		st->seg_count = 0;
-		st->buf_len = 0;
+		free_render_buffers(st);
 		if (!led_ok) {
 			VESC_IF->lbm_set_error_reason(
 				"Could not start a strip - check the pin numbers");
@@ -1125,24 +1123,13 @@ static void esp_led_stop(esp_led_t *st) {
 		VESC_IF->rgbled_deinit(st->group[gi].pin);
 	}
 
-	VESC_IF->free(st->work); st->work = NULL;
-	for (int gi = 0; gi < st->group_count; gi++) {
-		for (int b = 0; b < 2; b++) {
-			if (st->group[gi].txbuf[b]) {
-				VESC_IF->free(st->group[gi].txbuf[b]);
-				st->group[gi].txbuf[b] = NULL;
-			}
-		}
-	}
+	free_render_buffers(st);
 	for (int i = 0; i < esp_led_SEG_MAX; i++) {
 		if (st->seg[i].manual) {
 			VESC_IF->free(st->seg[i].manual);
 			st->seg[i].manual = NULL;
 		}
 	}
-	st->group_count = 0;
-	st->buf_len = 0;
-	st->seg_count = 0;
 }
 
 static lbm_value ext_deinit(lbm_value *args, lbm_uint argn) {
@@ -1376,7 +1363,7 @@ static lbm_value ext_seg_pixel(lbm_value *a, lbm_uint n) {
 // a list of packed colours. Pixels past the end of the segment are ignored.
 static lbm_value ext_seg_pixels(lbm_value *a, lbm_uint n) {
 	esp_led_t *st = state();
-	if (n != 3 || !VESC_IF->lbm_is_number(a[0]) || !VESC_IF->lbm_is_number(a[1])) {
+	if (n != 3 || !check_num_args(a, 2, 2)) {
 		return VESC_IF->lbm_enc_sym_terror;
 	}
 	seg_t *s = seg_arg(st, a[0]);
@@ -1423,11 +1410,11 @@ static lbm_value ext_col_rgbw(lbm_value *args, lbm_uint argn) {
 	if (argn != 3 && argn != 4) return VESC_IF->lbm_enc_sym_terror;
 	if (!check_num_args(args, argn, argn)) return VESC_IF->lbm_enc_sym_terror;
 
-	uint32_t r = VESC_IF->lbm_dec_as_u32(args[0]) & 0xFF;
-	uint32_t g = VESC_IF->lbm_dec_as_u32(args[1]) & 0xFF;
-	uint32_t b = VESC_IF->lbm_dec_as_u32(args[2]) & 0xFF;
-	uint32_t w = argn == 4 ? VESC_IF->lbm_dec_as_u32(args[3]) & 0xFF : 0;
-	uint32_t c = pack(r, g, b, w);
+	static const uint8_t shifts[] = {16, 8, 0, 24};
+	uint32_t c = 0;
+	for (lbm_uint i = 0; i < argn; i++) {
+		c |= (VESC_IF->lbm_dec_as_u32(args[i]) & 0xFF) << shifts[i];
+	}
 
 	VESC_IF->mutex_lock(st->lock);
 	for (int i = 0; i < esp_led_SEG_MAX; i++) {

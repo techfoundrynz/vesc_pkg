@@ -263,8 +263,8 @@ Item {
     function gpioRangeDescription() {
         var caps = gpioTargets[gpioTarget]
         if (!caps) return "Waiting for device GPIO capabilities."
-        return caps.gap.length === 0 ? "0–" + caps.max
-            : "0–" + (caps.gap[0] - 1) + ", " + (caps.gap[1] + 1) + "–" + caps.max
+        return caps.gap.length === 0 ? "0-" + caps.max
+            : "0-" + (caps.gap[0] - 1) + ", " + (caps.gap[1] + 1) + "-" + caps.max
     }
 
     function pinConfigurationError() {
@@ -322,6 +322,38 @@ Item {
     property real lcmHumTemp: 0
     property real bmsHum: 0
     property real bmsHumTemp: 0
+    property var ssbmsTelemetry: null
+    property double ssbmsTelemetryClock: 0
+    readonly property real ssbmsTelemetryAge: ssbmsTelemetry
+        ? ssbmsTelemetry.age + Math.max(0, ssbmsTelemetryClock - ssbmsTelemetry.receivedAt) / 1000 : -1
+    readonly property bool ssbmsTelemetryAvailable: ssbmsTelemetry !== null
+        && ssbmsTelemetry.backend === bmsBackend.currentIndex
+    readonly property bool ssbmsTelemetryConnected: !statusTimeout
+        && (ssbmsUartSelected || ssbmsBleSelected)
+        && (bmsConnected === 1 || (ssbmsBleSelected && ssbmsBleLinkConnected))
+    onSsbmsTelemetryConnectedChanged: if (!ssbmsTelemetryConnected) ssbmsTelemetry = null
+
+    function applySsbmsTelemetry(message) {
+        var values = message.replace(/\0/g, "").trim().split(/\s+/).slice(1).map(Number)
+        if (values.length < 11 || (values[0] !== 2 && values[0] !== 3) || values[1] < 0) {
+            // Retain the last complete sample while this transport waits for
+            // fresh data. A stopped backend clears it.
+            if (!ssbmsTelemetry || ssbmsTelemetry.backend !== values[0]) ssbmsTelemetry = null
+            return
+        }
+        var count = values[10]
+        if (count < 12 || count > 32 || Math.floor(count) !== count || values.length !== 11 + count) return
+        for (var i = 0; i < values.length; i++) if (!isFinite(values[i])) return
+        var cells = values.slice(11)
+        var low = Math.min.apply(Math, cells), high = Math.max.apply(Math, cells)
+        var now = Date.now()
+        ssbmsTelemetryClock = now
+        ssbmsTelemetry = {backend: values[0], age: values[1], receivedAt: now,
+            voltage: values[2], soc: values[3], current: values[4],
+            temp1: values[5], temp2: values[6], mosfet: values[7],
+            chargeAllowed: values[8] !== 0, status: values[9], cells: cells,
+            low: low, high: high, spread: (high - low) * 1000}
+    }
     property int loggerRunning: 0
     property string pubmoteVersionStr: "Unknown"
 
@@ -453,6 +485,11 @@ Item {
     onStatusTimeoutChanged: {
         if (statusTimeout) {
             gpioTarget = ""
+            ssbmsBleLinkConnected = false
+            ssbmsTelemetry = null
+            ssbmsBleConnectPhase = 0
+            ssbmsBleProgressMessage = ""
+            ssbmsBleConnectTimer.stop()
             pubmoteInputConnected = false
             pubmoteInputJsy = 0
             pubmoteInputJsx = 0
@@ -534,7 +571,30 @@ Item {
     property int ssbmsBleLinkA: 0
     property int ssbmsBleLinkB: 0
     property int ssbmsBleRssi: 0
+    property int ssbmsBleConnectPhase: 0
+    property string ssbmsBleProgressMessage: ""
+    readonly property bool ssbmsBleConnecting: ssbmsBleConnectPhase > 0 && ssbmsBleConnectPhase < 6
     ListModel { id: ssbmsBleFound }
+
+    function ssbmsBlePeerSaved(a, b) {
+        return ssbmsBlePinned && (a | 0) === (ssbmsBleAddressA | 0) && (b | 0) === (ssbmsBleAddressB | 0)
+    }
+    function ssbmsBlePeerLinked(a, b) {
+        return ssbmsBleLinkConnected && (a | 0) === (ssbmsBleLinkA | 0) && (b | 0) === (ssbmsBleLinkB | 0)
+    }
+    function ssbmsBleConnectText(a, b) {
+        if (ssbmsBlePeerLinked(a, b)) return "Connected"
+        if (ssbmsBlePeerSaved(a, b)) return ssbmsBleConnecting ? "Connecting..." : "Retry"
+        return "Connect"
+    }
+    Timer {
+        id: ssbmsBleConnectTimer
+        interval: 20000
+        onTriggered: {
+            ssbmsBleConnectPhase = 0
+            ssbmsBleProgressMessage = "No connection progress received. Check the Lisp console."
+        }
+    }
 
     function formatBleAddress(a, b) {
         var bytes = [(a >>> 24) & 255, (a >>> 16) & 255, (a >>> 8) & 255, a & 255,
@@ -555,6 +615,7 @@ Item {
         }
     }
     readonly property bool expressBleClientMissing: expressBleRole === 0 || expressBleRole === 1
+
     readonly property var expressBleRoleNames: ["Disabled", "Server", "Client", "Client & Server"]
 
         // VESC Tool rebuilds its ConfigParams object on every settings read, so a
@@ -574,6 +635,31 @@ Item {
     }
 
     property bool configReloadRequested: false
+
+    // Lisp announces successful image creation and retries until acknowledged.
+    // Tool may have enumerated configs earlier, during the initial parse.
+    function handleStartupImageCreated() {
+        sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(setq startup-image-created nil)")
+        reloadMissingConfigAfterBoot()
+    }
+
+    function reloadMissingConfigAfterBoot() {
+        if (configReloadRequested || resolveCustomConf()) {
+            return
+        }
+        configReloadRequested = true
+        startupConfigReloadTimer.start()
+    }
+
+    Timer {
+        id: startupConfigReloadTimer
+        interval: 0
+        onTriggered: {
+            if (!resolveCustomConf()) {
+                VescIf.reloadFirmware()
+            }
+        }
+    }
 
     function requireCustomConf() {
         if (resolveCustomConf()) {
@@ -785,6 +871,19 @@ Item {
         }
     }
 
+    // Request BMS values only while its Config section is open.
+    Timer {
+        interval: 1000
+        repeat: true
+        triggeredOnStart: true
+        running: !statusTimeout && tabBar.currentIndex === 1 && tabBar2.currentIndex === 2
+            && (ssbmsUartSelected || ssbmsBleSelected)
+        onTriggered: {
+            ssbmsTelemetryClock = Date.now()
+            sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(ssbms-state)")
+        }
+    }
+
     // Polls the remote's input state while the preview section is visible and toggled on
     Timer {
         id: inputPreviewTimer
@@ -855,7 +954,10 @@ Item {
         id: pubmotePairPopup
         modal: true
         focus: true
-        anchors.centerIn: parent
+        // Whole pixels: centerIn can land on a half pixel, which blurs the Material
+        // buttons' shadow layer and makes them look tilted on high-DPI phones.
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
         width: Math.min(container.width - 20, 340)
 
         // Match the rounding of the standard cards elsewhere in the UI.
@@ -918,6 +1020,7 @@ Item {
                 Button {
                     text: "Reject"
                     Layout.fillWidth: true
+                    Layout.preferredWidth: 1  // even split, not by label width
                     onClicked: {
                         sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(pubmote-pair -2)");  // Reject pairing manually
                         mCommands.customConfigGet(faConfigIndex, false)
@@ -928,6 +1031,7 @@ Item {
                 Button {
                     text: "Accept"
                     Layout.fillWidth: true
+                    Layout.preferredWidth: 1  // even split, not by label width
                     highlighted: true
                     enabled: !pairingTimeout
                     onClicked: {
@@ -1496,7 +1600,10 @@ Item {
         id: termsPopup
         modal: true
         focus: true
-        anchors.centerIn: parent
+        // Whole pixels: centerIn can land on a half pixel, which blurs the Material
+        // buttons' shadow layer and makes them look tilted on high-DPI phones.
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
         width: Math.min(container.width - 20, 400)
         height: Math.min(container.height - 40, 560)
 
@@ -1564,6 +1671,7 @@ Item {
                 Button {
                     text: "Cancel"
                     Layout.fillWidth: true
+                    Layout.preferredWidth: 1  // even split, not by label width
                     onClicked: {
                         termsPopup.close()
                         bmsEnabled.checked = false
@@ -1575,6 +1683,7 @@ Item {
                     id: acceptButton
                     text: "Accept"
                     Layout.fillWidth: true
+                    Layout.preferredWidth: 1  // even split, not by label width
                     highlighted: true
                     enabled: acceptCheckBox.checked
                     onClicked: {
@@ -2143,7 +2252,6 @@ Item {
                 function onCheckedChanged() { updateEnabledIndices() }
             }
 
-
             TabButton {
                 text: qsTr("Lights")
                 enabled: ledEnabled.checked
@@ -2552,10 +2660,10 @@ Item {
                             spacing: 20
 
                         GroupBox {
-                            title: "LED General Config"
+                            title: "Lighting"
                             Layout.fillWidth: true
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "LED General Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Lighting" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -2567,7 +2675,7 @@ Item {
                                     wrapMode: Text.WordWrap
                                     color: fieldLabelStyle.color
                                     visible: integrationSelector.currentIndex === 1
-                                    text: "Automatically follows Refloat brightness when external LCM control is enabled and responding; otherwise uses local settings. Max Brightness still applies. Highbeam switching stays local; its intensity follows active brightness."
+                                    text: "Uses Refloat brightness when external LCM control is active; otherwise uses local settings. Max brightness always applies. Highbeam is switched locally."
                                 }
 
                                 ColumnLayout {
@@ -2576,7 +2684,7 @@ Item {
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
                                         font.bold: fieldLabelStyle.bold
-                                        text: "LED Frequency (Hz) "
+                                        text: "Update rate (Hz)"
                                         visible: ledEnabled.checked
                                     }
                                     SpinBox {
@@ -2602,7 +2710,7 @@ Item {
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
                                         font.bold: fieldLabelStyle.bold
-                                        text: "LED Max Brightness"
+                                        text: "Max brightness"
                                     }
                                     Loader {
                                         id: ledMaxBrightnessLoader
@@ -2819,7 +2927,7 @@ Item {
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
                                         font.bold: fieldLabelStyle.bold
-                                        text: "Brake Light Min Amps"
+                                        text: "Brake threshold (A)"
                                     }
 
                                     SpinBox {
@@ -2837,7 +2945,7 @@ Item {
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
                                         font.bold: fieldLabelStyle.bold
-                                        text: "Idle Timeout (sec)"
+                                        text: "Idle delay (s)"
                                     }
                                     SpinBox {
                                         id: idleTimeout
@@ -2854,7 +2962,7 @@ Item {
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
                                         font.bold: fieldLabelStyle.bold
-                                        text: "Idle Timeout Shutoff (sec)"
+                                        text: "Idle shutoff delay (s)"
                                     }
                                     SpinBox {
                                         id: idleTimeoutShutoff
@@ -2869,11 +2977,11 @@ Item {
                         }
 
                         GroupBox {
-                            title: "Status Config"
+                            title: "Status LEDs"
                             Layout.fillWidth: true
                             visible: ledStatusStripType.currentValue > 0
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Status Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Status LEDs" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -2934,7 +3042,7 @@ Item {
                                             color: fieldLabelStyle.color
                                             font.pixelSize: fieldLabelStyle.pixelSize
                                             font.bold: fieldLabelStyle.bold
-                                            text: "Status Num"
+                                            text: "LED count"
                                         }
                                         SpinBox {
                                             id: ledStatusNum
@@ -3016,11 +3124,11 @@ Item {
                         }
 
                         GroupBox {
-                            title: "LED Front Config"
+                            title: "Front LEDs"
                             Layout.fillWidth: true
                             visible: ledFrontStripType.currentValue > 0
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "LED Front Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Front LEDs" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -3153,7 +3261,7 @@ Item {
                                         wrapMode: Text.WordWrap
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
-                                        text: "Highbeam LED positions, counting from 0. Leave a box empty for an unused slot."
+                                        text: "Highbeam LED positions (first LED = 0). Leave unused slots blank."
                                     }
                                     // Four boxes because the config stores exactly four: one position per byte of
                                     // led_*_highbeam_pos, 255 meaning unused. A slot each is closer to what is
@@ -3245,7 +3353,7 @@ Item {
                                             color: fieldLabelStyle.color
                                             font.pixelSize: fieldLabelStyle.pixelSize
                                             font.bold: fieldLabelStyle.bold
-                                            text: "Front Num"
+                                            text: "LED count"
                                         }
                                         SpinBox {
                                             id: ledFrontNum
@@ -3335,11 +3443,11 @@ Item {
                         }
 
                         GroupBox {
-                            title: "LED Rear Config"
+                            title: "Rear LEDs"
                             Layout.fillWidth: true
                             visible: ledRearStripType.currentValue > 0
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "LED Rear Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Rear LEDs" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -3472,7 +3580,7 @@ Item {
                                         wrapMode: Text.WordWrap
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
-                                        text: "Highbeam LED positions, counting from 0. Leave a box empty for an unused slot."
+                                        text: "Highbeam LED positions (first LED = 0). Leave unused slots blank."
                                     }
                                     // Four boxes because the config stores exactly four: one position per byte of
                                     // led_*_highbeam_pos, 255 meaning unused. A slot each is closer to what is
@@ -3564,7 +3672,7 @@ Item {
                                             color: fieldLabelStyle.color
                                             font.pixelSize: fieldLabelStyle.pixelSize
                                             font.bold: fieldLabelStyle.bold
-                                            text: "Rear Num"
+                                            text: "LED count"
                                         }
                                         SpinBox {
                                             id: ledRearNum
@@ -3654,11 +3762,11 @@ Item {
                         }
 
                         GroupBox {
-                            title: "LED Button Config"
+                            title: "Button LED"
                             Layout.fillWidth: true
                             visible: ledButtonStripType.currentValue > 0
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "LED Button Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Button LED" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -3720,11 +3828,11 @@ Item {
                         }
 
                         GroupBox {
-                            title: "LED Footpad Config"
+                            title: "Footpad LEDs"
                             Layout.fillWidth: true
                             visible: ledFootpadStripType.currentValue > 0
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "LED Footpad Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Footpad LEDs" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -3789,7 +3897,7 @@ Item {
                                             color: fieldLabelStyle.color
                                             font.pixelSize: fieldLabelStyle.pixelSize
                                             font.bold: fieldLabelStyle.bold
-                                            text: "Footpad Num"
+                                            text: "LED count"
                                         }
                                         SpinBox {
                                             id: ledFootpadNum
@@ -3928,10 +4036,10 @@ Item {
                         spacing: 20
                         visible: pubmoteEnabled.checked && tabBar2.currentIndex === 1
                         GroupBox {
-                            title: "Pubmote Config"
+                            title: "Pubmote"
                             Layout.fillWidth: true
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Pubmote Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Pubmote" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -4129,10 +4237,10 @@ Item {
                         spacing: 20
                         visible: bmsEnabled.checked && tabBar2.currentIndex === 2
                         GroupBox {
-                            title: "BMS Backend"
+                            title: "BMS Connection"
                             Layout.fillWidth: true
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "BMS Backend" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "BMS Connection" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
                             ColumnLayout {
                                 anchors.fill: parent
@@ -4148,7 +4256,7 @@ Item {
                                     wrapMode: Text.WordWrap
                                     color: fieldLabelStyle.color
                                     visible: bmsBackend.currentIndex === 0
-                                    text: "Select a backend to use BMS communications. None keeps BMS communications off."
+                                    text: "Choose how to connect your BMS. None disables the connection."
                                 }
                             }
                         }
@@ -4165,7 +4273,7 @@ Item {
                                     Layout.fillWidth: true
                                     wrapMode: Text.WordWrap
                                     color: fieldLabelStyle.color
-                                    text: "Read-only UART at 115200 baud (8N1), using UART 1. Set both pins; -1 means unassigned. Cell voltages, temperatures and charging status are polled automatically. SoC is estimated from the lowest cell using Cell Type in State of Charge Reporting."
+                                    text: "UART 1: 115200 baud, 8N1. Assign both RX and TX pins (-1 = unassigned). Read-only telemetry; SoC uses the lowest cell and your Cell Type setting."
                                 }
                                 ColumnLayout {
                                     spacing: cardStyle.labelSpacing
@@ -4173,7 +4281,7 @@ Item {
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
                                         font.bold: fieldLabelStyle.bold
-                                        text: "ESP RX Pin (SSBMS TX)"
+                                        text: "RX pin (BMS TX)"
                                     }
                                     SpinBox {
                                         id: ssbmsUartRxPin
@@ -4190,7 +4298,7 @@ Item {
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
                                         font.bold: fieldLabelStyle.bold
-                                        text: "ESP TX Pin (SSBMS RX)"
+                                        text: "TX pin (BMS RX)"
                                     }
                                     SpinBox {
                                         id: ssbmsUartTxPin
@@ -4216,29 +4324,50 @@ Item {
                                     Layout.fillWidth: true
                                     wrapMode: Text.WordWrap
                                     color: fieldLabelStyle.color
-                                    text: "Read-only Bluetooth link to the paired SSBMS or XJBMS, or the first one found when none is paired; it reconnects automatically. Requires VESC Express > Bluetooth > LispBM role set to Client or Client and server, then a reboot. Keep any other BMS app disconnected, because the BMS accepts one connection. SoC is estimated from the lowest cell using Cell Type in State of Charge Reporting."
+                                    text: "Scan, then Connect to save your BMS. Close any BMS phone app first."
                                 }
                                 // One line for paired x connected, so a paired BMS that is
                                 // out of range or off still shows, next to Forget.
                                 Text {
                                     Layout.fillWidth: true
                                     wrapMode: Text.WordWrap
+                                    visible: ssbmsBlePinned || ssbmsBleLinkConnected
                                     readonly property string linkText: ssbmsBleLinkConnected
                                         ? formatBleAddress(ssbmsBleLinkA, ssbmsBleLinkB) + " (" + ssbmsBleRssi + " dBm)" : ""
-                                    color: ssbmsBleLinkConnected && ssbmsBlePinned ? statusSummary.okColor : statusSummary.warnColor
+                                    readonly property bool pinnedLinked: ssbmsBlePinned && ssbmsBlePeerLinked(ssbmsBleAddressA, ssbmsBleAddressB)
+                                    color: pinnedLinked ? statusSummary.okColor : statusSummary.warnColor
                                     text: ssbmsBlePinned
-                                        ? (ssbmsBleLinkConnected
-                                            ? "Paired BMS connected: " + linkText
-                                            : "Paired BMS " + formatBleAddress(ssbmsBleAddressA, ssbmsBleAddressB)
-                                              + " is not connected. Wake the BMS and disconnect any phone app, or Forget it to pair another.")
-                                        : (ssbmsBleLinkConnected
-                                            ? "Connected to the first BMS found, not paired: " + linkText + ". Connect to it below to pair it."
-                                            : "No BMS paired: the first SSBMS or XJBMS found is used. Scan and connect to your pack so a nearby battery is never used for ESC limits.")
+                                        ? (pinnedLinked
+                                            ? "Connected: " + linkText
+                                            : "Saved BMS " + formatBleAddress(ssbmsBleAddressA, ssbmsBleAddressB)
+                                              + " not connected" + (ssbmsBleLinkConnected ? " (linked to " + linkText + ")" : "")
+                                              + ". Wake it, or Forget.")
+                                        : "Disconnecting forgotten BMS: " + linkText
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    visible: ssbmsBleProgressMessage !== "" && !ssbmsBleScanning
+                                        && (ssbmsBlePinned || ssbmsBleLinkConnected || ssbmsBleConnectPhase > 0)
+                                    color: ssbmsBleConnectPhase === 6 ? statusSummary.okColor : statusSummary.warnColor
+                                    text: ssbmsBleProgressMessage
                                 }
                                 RowLayout {
                                     Button {
-                                        text: ssbmsBleScanning ? "Scanning..." : "Scan"
+                                        id: ssbmsBleScanButton
+                                        text: "Scan"
+                                        visible: !ssbmsBlePinned
                                         enabled: !ssbmsBleScanning
+                                        Accessible.name: ssbmsBleScanning ? "Scanning for BMS" : text
+                                        contentItem.opacity: ssbmsBleScanning ? 0 : 1
+                                        BusyIndicator {
+                                            anchors.centerIn: parent
+                                            width: 20
+                                            height: 20
+                                            padding: 0
+                                            running: ssbmsBleScanning
+                                            visible: running
+                                        }
                                         onClicked: {
                                             ssbmsBleFound.clear()
                                             ssbmsBleScanMessage = ""
@@ -4252,13 +4381,6 @@ Item {
                                         visible: ssbmsBlePinned
                                         onClicked: sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(ssbms-ble-select 0 0)")
                                     }
-                                }
-                                Text {
-                                    Layout.fillWidth: true
-                                    wrapMode: Text.WordWrap
-                                    color: fieldLabelStyle.color
-                                    visible: ssbmsBleScanning
-                                    text: "Scanning for 5 seconds. The current BMS link drops while scanning and reconnects afterwards."
                                 }
                                 Text {
                                     Layout.fillWidth: true
@@ -4278,10 +4400,10 @@ Item {
                                             text: model.name + "  " + formatBleAddress(model.a, model.b) + "  " + model.rssi + " dBm"
                                         }
                                         Button {
-                                            readonly property bool current: model.a === ssbmsBleAddressA && model.b === ssbmsBleAddressB
-                                            readonly property bool linked: ssbmsBleLinkConnected && model.a === ssbmsBleLinkA && model.b === ssbmsBleLinkB
-                                            text: linked ? "Connected" : (current ? "Connecting..." : "Connect")
-                                            enabled: !current && !ssbmsBleScanning
+                                            readonly property bool current: ssbmsBlePeerSaved(model.a, model.b)
+                                            readonly property bool linked: ssbmsBlePeerLinked(model.a, model.b)
+                                            text: ssbmsBleConnectText(model.a, model.b)
+                                            enabled: !linked && !ssbmsBleScanning && (!current || !ssbmsBleConnecting)
                                             onClicked: sendCode(String.fromCharCode(102) + String.fromCharCode(1)
                                                 + "(ssbms-ble-select " + model.a + " " + model.b + ")")
                                         }
@@ -4292,8 +4414,8 @@ Item {
                                     wrapMode: Text.WordWrap
                                     visible: expressBleClientMissing
                                     color: statusSummary.errColor
-                                    text: "The VESC Express Bluetooth LispBM role is " + (expressBleClientMissing ? expressBleRoleNames[expressBleRole] : "")
-                                        + ", so SSBMS BLE cannot connect. It must be Client or Client & Server."
+                                    text: "Bluetooth role: " + (expressBleClientMissing ? expressBleRoleNames[expressBleRole] : "")
+                                        + ". Select Client or Client & Server, then reboot."
                                 }
                                 Button {
                                     visible: expressBleClientMissing
@@ -4308,14 +4430,14 @@ Item {
                                     wrapMode: Text.WordWrap
                                     visible: expressBleRole === -1
                                     color: statusSummary.errColor
-                                    text: "This VESC Express firmware has no LispBM Bluetooth client. Update the firmware to use SSBMS BLE."
+                                    text: "Update Express firmware to enable SSBMS BLE."
                                 }
                                 Text {
                                     Layout.fillWidth: true
                                     wrapMode: Text.WordWrap
                                     visible: expressBleRebootPending
                                     color: statusSummary.warnColor
-                                    text: "Bluetooth role saved. Reboot the VESC Express for it to take effect."
+                                    text: "Role saved. Reboot Express to apply."
                                 }
                                 Button {
                                     visible: expressBleRebootPending
@@ -4328,11 +4450,67 @@ Item {
                             }
                         }
                         GroupBox {
-                            title: "OW BMS Comms"
+                            id: ssbmsTelemetryCard
+                            title: "SSBMS Telemetry"
+                            visible: ssbmsTelemetryConnected
+                            Layout.fillWidth: true
+                            background: Loader { sourceComponent: cardBg }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "SSBMS Telemetry" }
+                            topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
+                            ColumnLayout {
+                                anchors.fill: parent
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                    color: ssbmsTelemetryAvailable && ssbmsTelemetryAge < 3 ? statusSummary.okColor : statusSummary.warnColor
+                                    text: ssbmsTelemetryAvailable
+                                        ? "Last telemetry: " + ssbmsTelemetryAge.toFixed(1) + " s ago" + (ssbmsTelemetryAge >= 3 ? " (stale)" : "")
+                                        : "Connected; waiting for telemetry."
+                                }
+                                ColumnLayout {
+                                    visible: ssbmsTelemetryAvailable
+                                    Layout.fillWidth: true
+                                    Text {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        color: fieldLabelStyle.color
+                                        text: ssbmsTelemetryAvailable ? "Pack: " + ssbmsTelemetry.voltage.toFixed(2) + " V    SoC: " + ssbmsTelemetry.soc.toFixed(1) + "% (estimated)" : ""
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        color: fieldLabelStyle.color
+                                        text: ssbmsTelemetryAvailable ? "Cells: " + ssbmsTelemetry.cells.length + "    Min: " + ssbmsTelemetry.low.toFixed(3) + " V    Max: " + ssbmsTelemetry.high.toFixed(3) + " V    Spread: " + ssbmsTelemetry.spread.toFixed(0) + " mV" : ""
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        color: fieldLabelStyle.color
+                                        text: ssbmsTelemetryAvailable ? "Charging current: " + Math.max(0, -ssbmsTelemetry.current).toFixed(2) + " A    Charging: " + ((ssbmsTelemetry.status & 32) ? "Yes" : "No") + "    Charge allowed: " + (ssbmsTelemetry.chargeAllowed ? "Yes" : "No") : ""
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        color: fieldLabelStyle.color
+                                        text: ssbmsTelemetryAvailable ? "Battery: " + ssbmsTelemetry.temp1.toFixed(1) + " / " + ssbmsTelemetry.temp2.toFixed(1) + " °C    MOSFET: " + ssbmsTelemetry.mosfet.toFixed(1) + " °C" : ""
+                                    }
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: 12
+                                        Repeater {
+                                            model: ssbmsTelemetryAvailable ? ssbmsTelemetry.cells : []
+                                            delegate: Text { color: fieldLabelStyle.color; text: "C" + (index + 1) + ": " + Number(modelData).toFixed(3) + " V" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        GroupBox {
+                            title: "OW BMS"
                             visible: owBmsEnabled
                             Layout.fillWidth: true
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "OW BMS Comms" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "OW BMS" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
                             ColumnLayout {
                                 anchors.fill: parent
@@ -4405,7 +4583,7 @@ Item {
 
                                     CheckBox {
                                         id: bmsRS485Chip
-                                        text: "RS485 Chip (Required for encrypted BMS charger level without Owie RS485 bypass)"
+                                        text: "RS485 adapter (required for encrypted charge control without Owie bypass)"
                                         checked: false
                                     }
 
@@ -4476,7 +4654,7 @@ Item {
 
                                     CheckBox {
                                         id: bmsChargeOnly
-                                        text: "Charge only (Mosfet toggle wakeup to keep alive)"
+                                        text: "Charge only (toggle MOSFET wake pin to stay awake)"
                                         checked: false
                                     }
 
@@ -4503,7 +4681,7 @@ Item {
 
                                     CheckBox {
                                         id: bmsOverrideSOC
-                                        text: "Override SOC (Choose cell type in Settings)"
+                                        text: "Estimate SoC (uses Cell Type in Settings)"
                                         checked: false
                                     }
 
@@ -4533,10 +4711,10 @@ Item {
                         spacing: 20
                         visible: logEnabled.checked && tabBar2.currentIndex === 3
                         GroupBox {
-                            title: "Logging Config"
+                            title: "SD Logging"
                             Layout.fillWidth: true
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "Logging Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "SD Logging" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -4569,7 +4747,7 @@ Item {
                                 Button {
                                     Layout.fillWidth: true
                                     Layout.preferredWidth: 500
-                                    text: "Test SD-card"
+                                    text: "Test SD card"
                                     visible: logEnabled.checked
 
                                     onClicked: {
@@ -4599,10 +4777,10 @@ Item {
                         spacing: 20
                         visible: gnssEnabled.checked && tabBar2.currentIndex === 4
                         GroupBox {
-                            title: "GNSS Config"
+                            title: "GNSS"
                             Layout.fillWidth: true
                             background: Loader { sourceComponent: cardBg }
-                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "GNSS Config" }
+                            label: Loader { sourceComponent: cardTitleLabel; onLoaded: item.title = "GNSS" }
                             topPadding: cardStyle.topPadding; leftPadding: cardStyle.sidePadding; rightPadding: cardStyle.sidePadding; bottomPadding: cardStyle.bottomPadding
 
                             ColumnLayout {
@@ -4683,7 +4861,7 @@ Item {
                                         color: fieldLabelStyle.color
                                         font.pixelSize: fieldLabelStyle.pixelSize
                                         font.bold: fieldLabelStyle.bold
-                                        text: "Nav Rate (ms)"
+                                        text: "Update interval (ms)"
                                     }
                                     SpinBox {
                                         id: gnssRateMs
@@ -5020,7 +5198,7 @@ Item {
                                 Layout.fillWidth: true
                                 wrapMode: Text.WordWrap
                                 color: fieldLabelStyle.color
-                                text: "Standalone runs local lights and accessories without ESC discovery, vehicle telemetry or remote-control forwarding."
+                                text: "Standalone runs lights and accessories locally. ESC telemetry and remote forwarding are disabled."
                             }
 
                             ColumnLayout {
@@ -5078,7 +5256,7 @@ Item {
                                     color: fieldLabelStyle.color
                                     font.pixelSize: fieldLabelStyle.pixelSize
                                     font.bold: fieldLabelStyle.bold
-                                    text: "SLC Pin"
+                                    text: "SCL pin"
                                 }
                                 SpinBox {
                                     id: humiditySlcPin
@@ -5110,9 +5288,7 @@ Item {
                                 wrapMode: Text.WordWrap
                                 color: fieldLabelStyle.color
                                 font.pixelSize: fieldLabelStyle.pixelSize - 2
-                                text: "Verbose logging prints to the VESC Tool Lisp console (Dev Tools → Lisp → Console). " +
-                                      "Pick only the areas you are chasing - everything on at once is a lot of output. " +
-                                      "This is stored in RAM only: it is not saved to the config and turns itself off when the board reboots."
+                                text: "Logs appear in Dev Tools → Lisp → Console. Enable the areas you need. Logging resets on reboot."
                             }
 
                             Text {
@@ -5170,7 +5346,7 @@ Item {
                                 wrapMode: Text.WordWrap
                                 color: fieldLabelStyle.color
                                 font.pixelSize: fieldLabelStyle.pixelSize - 2
-                                text: "Print Report dumps a one-shot snapshot (versions, thread ids, CAN/BMS/GNSS state, LED segment map) to the same console. It works with logging off."
+                                text: "Print Report sends a system snapshot to the console, even with logging off."
                             }
 
                             // Test mode fakes the telemetry every subsystem reads, not just the
@@ -5229,12 +5405,13 @@ Item {
                     writeConfigToParams()
                     mCommands.customConfigSet(faConfigIndex, mCustomConf)
 
-                    if (ssbmsBleSelected && (expressBleClientMissing || expressBleRole === -1)) {
-                        VescIf.emitMessageDialog("SSBMS BLE",
+                    if ((ssbmsBleSelected) && (expressBleClientMissing || expressBleRole === -1)) {
+                        var bleUser = "SSBMS BLE"
+                        VescIf.emitMessageDialog("Bluetooth Client",
                             expressBleRole === -1
-                                ? "Config saved, but this VESC Express firmware has no LispBM Bluetooth client, so SSBMS BLE cannot connect."
+                                ? "Config saved, but this VESC Express firmware has no LispBM Bluetooth client, so " + bleUser + " cannot connect."
                                 : "Config saved, but the VESC Express Bluetooth LispBM role is " + expressBleRoleNames[expressBleRole]
-                                  + ". Use Set Role on the SSBMS BLE card, or set it under VESC Express > Bluetooth, then reboot.",
+                                  + ", so " + bleUser + " cannot connect. Use Set Role on the SSBMS BLE card, or set it under VESC Express > Bluetooth, then reboot.",
                             false, false)
                     }
 
@@ -5801,7 +5978,9 @@ Item {
                 sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(send-debug)")
             }
 
-            if (str.startsWith("debug ")) {
+            if (str.replace(/\0/g, "").trim() === "fa-image-created") {
+                handleStartupImageCreated()
+            } else if (str.startsWith("debug ")) {
                 // parseInt rather than Number: it stops at the trailing NUL
                 // the lisp string carries instead of returning NaN.
                 applyDebugMask(parseInt(str.split(" ")[1], 10) || 0)
@@ -5880,9 +6059,16 @@ Item {
             } else if (str.startsWith("ssbms-scan-done ")) {
                 var count = parseInt(str.split(" ")[1], 10)
                 ssbmsBleScanning = false
-                ssbmsBleScanMessage = count < 0
-                    ? "Save Config with BMS Enabled and SSBMS BLE selected, then scan."
-                    : (count === 0 ? "No SSBMS or XJBMS found. Disconnect any phone app and wake the BMS." : "")
+                ssbmsBleScanMessage = count === -2
+                    ? "Bluetooth busy. Try again shortly."
+                    : count < 0 ? "Enable BMS with SSBMS BLE, Save Config, then scan."
+                    : (count === 0 ? "No BMS found. Wake it, close other BMS apps, retry." : "")
+            } else if (str.startsWith("ssbms-ble-progress ")) {
+                var progress = str.replace(/\0/g, "").split(" ")
+                ssbmsBleConnectPhase = parseInt(progress[1], 10)
+                ssbmsBleProgressMessage = progress.slice(2).join(" ")
+                if (ssbmsBleConnecting) ssbmsBleConnectTimer.restart()
+                else ssbmsBleConnectTimer.stop()
             } else if (str.startsWith("ssbms-ble-selected ")) {
                 var selected = str.replace(/\0/g, "").split(" ")
                 if (selected[1] === "1") {
@@ -5929,6 +6115,8 @@ Item {
             } else if (str.startsWith("pairing-status")) {
                 var tokens = str.split(" ");
                 pubmotePairingState = Number(tokens[1]);
+            } else if (str.startsWith("ssbms-state ")) {
+                applySsbmsTelemetry(str)
             } else if (str.startsWith("input-state")) {
                 var tokens = str.split(" ");
                 var pmConn = !!Number(tokens[1]);

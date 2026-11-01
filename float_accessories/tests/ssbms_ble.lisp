@@ -21,12 +21,16 @@
 (def connected nil)
 (def advertise t)
 (def cmd-props 0x0c)
+(def setup-failure nil)
+(def progress-phases nil)
+(def debug-lines nil)
 (def answer t)
 (def mtu 23)
 (def rssi-query nil)
 (def scans 0)
 (def cancels 0)
 (def disconnects 0)
+(def connect-attempts 0)
 (def write-modes nil)
 (def warnings nil)
 (def writes nil)
@@ -42,12 +46,25 @@
 (def sent nil)
 (defun conf-set (key value) (if (eq key 'ble-mode-lbm) (setq lbm-role value)))
 (defun conf-store () (setq stores (+ stores 1)))
-(defun send-data (text) (setq outbox (cons text outbox)))
+(defun send-data (text) {
+    (setq outbox (cons text outbox))
+    (var prefix "ssbms-ble-progress ")
+    (var n (- (buflen prefix) 1))
+    (var same (> (buflen text) n))
+    (if same (looprange i 0 n
+        (if (!= (bufget-u8 text i) (bufget-u8 prefix i)) (setq same nil))))
+    (if same (setq progress-phases (cons (- (bufget-u8 text n) 48) progress-phases)))
+})
 (defun test-clock () now)
 (defun test-age (stamp) (- now stamp))
 (defun test-sleep (seconds) { (setq now (+ now seconds)) (if cancel (setq bms-stop-requested t)) })
 (defun dbg-warn (message) (setq warnings (cons message warnings)))
-(defun dbg (cat message) nil)
+(defun dbg (cat message) {
+    ; The real console streams logs; do not retain every advertisement forever.
+    (if (>= (length debug-lines) 8) (setq debug-lines nil))
+    (setq debug-lines (cons message debug-lines))
+})
+(defun dbg-active (cat) t)
 (defun test-id () 66)
 (defun expect (actual wanted)
     (if (not (eq actual wanted)) (exit-error (to-str (list actual 'wanted wanted)))))
@@ -66,9 +83,21 @@
     (setq frames (acons (shr id 8) copy frames))
 })
 (defun push (event) (setq queue (append queue (list event))))
-(defun ble-client-event () (if queue { (var event (car queue)) (setq queue (cdr queue)) event } nil))
-(defun ble-client-dropped () dropped)
-(defun ble-client-scan (ms) {
+; (ble-client-event t) adds the connection field the shared client routes on.
+(defun test-with-conn (event)
+    (cons (car event) (cons (match (car event) (ble-scan-result 65535) (ble-scan-done 65535)
+        (ble-connect-result (ix event 1)) (ble-disconnected (ix event 1)) (_ 0)) (cdr event))))
+(defun ble-client-event () (if queue {
+    (var event (car queue))
+    (setq queue (cdr queue))
+    (if (rest-args) (test-with-conn event) event)
+} nil))
+; client-down: the role is saved but the client was not started by a reboot,
+; so the client extensions only raise errors.
+(def client-down nil)
+(defun ble-client-dropped () (if client-down (car 1) dropped))
+(defunret ble-client-scan (ms) {
+    (if (and (> ms 0) (eq setup-failure 'scan-refused)) (return 9))
     (if (= ms 0) (setq cancels (+ cancels 1)) {
         (setq scans (+ scans 1))
         (push (list 'ble-scan-result [1 2 3 4 5 6] 0 -50 adv-other))
@@ -80,23 +109,35 @@
 ; Connection handle 0 is valid and must not be mistaken for "none".
 (defun ble-client-connect () {
     (var args (rest-args))
-    (if (and args (eq (ix args 0) nil)) {
-        (setq disconnects (+ disconnects 1))
-        (if connected (push (list 'ble-disconnected 0 22)))
-        (setq connected nil)
-    } (if (and (= (length args) 1) (number? (ix args 0))) (setq rssi-query t) {
-        (expect (ix args 0) peer)
-        (expect (ix args 1) 1)
-        (setq connected t)
-        (push (list 'ble-connect-result 0 0))
-    }))
-    (if rssi-query { (setq rssi-query nil) -55 } t)
+    (cond
+        ((and args (eq (ix args 0) t)) (if connected (list 0) nil))
+        ((and args (eq (ix args 0) nil)) {
+            (setq disconnects (+ disconnects 1))
+            (if connected (push (list 'ble-disconnected 0 22)))
+            (setq connected nil)
+            t
+        })
+        ((and (= (length args) 1) (number? (ix args 0))) -55)
+        ((eq setup-failure 'refused) 9)
+        (t {
+            (setq connect-attempts (+ connect-attempts 1))
+            (expect (ix args 0) peer)
+            (expect (ix args 1) 1)
+            (setq connected (not (eq setup-failure 'connect-timeout)))
+            (if connected (push (list 'ble-connect-result 0 0)))
+            t
+        }))
 })
-(defun ble-client-exchange-mtu (conn) { (expect conn 0) (push (list 'ble-mtu-result mtu 0)) t })
+(defun ble-client-exchange-mtu (conn) {
+    (expect conn 0)
+    (if (not (eq setup-failure 'mtu-timeout)) (push (list 'ble-mtu-result mtu 0)))
+    t
+})
 (defun ble-client-discover-services (conn) {
     (push (list 'ble-service 1 9 [0x18 0x00]))
-    (push (list 'ble-service 10 20 svc))
-    (push (list 'ble-procedure-done 4 0))
+    (if (not (eq setup-failure 'no-service)) (push (list 'ble-service 10 20 svc)))
+    (push (list 'ble-service 30 40 [0x18 0x0f]))
+    (push (list 'ble-procedure-done 4 (if (eq setup-failure 'services) 7 0)))
     t
 })
 (defun ble-client-discover-chars (start end conn) {
@@ -104,18 +145,18 @@
     (push (list 'ble-characteristic 12 11 cmd-props cmd))
     (push (list 'ble-characteristic 14 13 0x10 rsp))
     (push (list 'ble-characteristic 17 16 0x02 [0x2a 0x19]))
-    (push (list 'ble-procedure-done 5 0))
+    (push (list 'ble-procedure-done 5 (if (eq setup-failure 'characteristics) 8 0)))
     t
 })
 (defun ble-client-discover-descriptors (start end conn) {
     (expect start 14) (expect end 15)
-    (push (list 'ble-descriptor 15 [0x29 0x02]))
+    (if (not (eq setup-failure 'no-cccd)) (push (list 'ble-descriptor 15 [0x29 0x02])))
     (push (list 'ble-procedure-done 6 0))
     t
 })
 (defun ble-client-subscribe (handle mode conn) {
     (expect handle 15) (expect mode 1)
-    (push (list 'ble-write-result 15 0))
+    (push (list 'ble-write-result 15 (if (eq setup-failure 'subscribe) 5 0)))
     t
 })
 ; Replies are split into MTU-3 notifications, after unrelated traffic and noise.
@@ -151,9 +192,9 @@
 (expect (ssbms-ble-match-adv [6 0xff 0x53 0x53 0x42 0x4d 0x53]) nil)
 (expect (ssbms-ble-match-adv [40 9 0x53 0x53 0x42]) nil)
 (expect (ssbms-ble-match-adv [0 9 0x53]) nil)
-(expect (ssbms-ble-cccd [0x29 0x02]) t)
-(expect (ssbms-ble-cccd [0 0 0x29 0x02 0 0 0x10 0 0x80 0 0 0x80 0x5f 0x9b 0x34 0xfb]) t)
-(expect (ssbms-ble-cccd [0x29 0x03]) nil)
+(expect (blec-cccd [0x29 0x02]) t)
+(expect (blec-cccd [0 0 0x29 0x02 0 0 0x10 0 0x80 0 0 0x80 0x5f 0x9b 0x34 0xfb]) t)
+(expect (blec-cccd [0x29 0x03]) nil)
 ; Role reporting and the UI fix: Server keeps Server, saved once to flash.
 (expect (express-ble-role) 1)
 (express-ble-enable-client)
@@ -169,13 +210,37 @@
 (expect (ssbms-ble-init) nil)
 (expect ssbms-rx nil)
 (setq lbm-role 2)
+(setq client-down t)
+(setq warnings nil)
+(expect (ssbms-ble-init) nil)
+(expect ssbms-rx nil)
+(expect (car warnings) "SSBMS BLE: reboot the VESC Express to start the Bluetooth client")
+(setq client-down nil)
 (expect (ssbms-ble-init) t)
+; No saved BMS: background link/scan calls must never start discovery.
+(def before-scans scans)
+(setq warnings nil)
+(expect (ssbms-ble-link) nil)
+(expect (ssbms-ble-scan 'link) nil)
+(expect scans before-scans)
+(expect connect-attempts 0)
+(expect warnings nil)
+; The picker can still discover peers without selecting or connecting one.
+(expect (ssbms-ble-scan 'list) 1)
+(expect connected nil)
+(expect connect-attempts 0)
+(setq addr-a -1430532899)
+(setq addr-b -285277951)
 ; No advertiser: the scan finishes without connecting.
 (setq advertise nil)
+(setq warnings nil)
 (expect (ssbms-ble-link) nil)
 (expect connected nil)
+(expect warnings nil)
 (setq advertise t)
+(setq progress-phases nil)
 (expect (ssbms-ble-link) t)
+(expect (reverse progress-phases) '(1 2 3 4 5 6))
 (expect ssbms-ble-conn 0)
 (expect ssbms-ble-cmd 12)
 (expect ssbms-ble-rsp 14)
@@ -219,19 +284,26 @@
 (defun test-store () { (setq facfg-stores (+ facfg-stores 1)) t })
 (setq outbox nil)
 (ssbms-ble-select -1430532899 -285277951)
-(expect (str-cmp (car outbox) "ssbms-ble-selected 1 -1430532899 -285277951") 0)
+(expect (str-cmp (ix outbox 1) "ssbms-ble-selected 1 -1430532899 -285277951") 0)
 (expect (list addr-a addr-b facfg-stores) '(-1430532899 -285277951 1))
 (expect (ssbms-ble-interrupted) t)
 (setq ssbms-ble-relink nil)
 ; Forget unpins the same way.
 (ssbms-ble-select 0 0)
+(expect (str-cmp (car outbox) "ssbms-ble-progress 0 Saved BMS cleared; press Scan to select a BMS") 0)
 (expect (list addr-a addr-b facfg-stores ssbms-ble-relink) '(0 0 2 t))
+(setq before-scans scans)
+(expect (ssbms-ble-link) nil)
+(expect scans before-scans)
 (setq ssbms-ble-relink nil)
 ; A refused write (test mode) reports failure and leaves the link alone.
 (defun set-config (key value) nil)
 (ssbms-ble-select 5 6)
 (expect (str-cmp (car outbox) "ssbms-ble-selected 0 5 6") 0)
 (expect (list addr-a addr-b facfg-stores ssbms-ble-relink) '(0 0 2 nil))
+; Re-select the test peer before exercising connection recovery.
+(setq addr-a -1430532899)
+(setq addr-b -285277951)
 ; Scan requests reach only a running backend.
 (ssbms-ble-request-scan)
 (expect ssbms-ble-scan-requested t)
@@ -246,8 +318,8 @@
 (push (list 'ble-disconnected 0 8))
 (setq connected nil)
 (expect (ssbms-ble-read 0 16 ssbms-status) nil)
-(expect ssbms-ble-lost t)
-(expect ssbms-ble-conn -1)
+(expect (blec-lost 'ssbms) t)
+(expect (ssbms-ble-up) nil)
 (ssbms-ble-drop)
 (expect (ssbms-ble-link) t)
 ; A lost queue event is a loss of state as well.
@@ -266,6 +338,38 @@
 (setq write-modes nil)
 (expect (ssbms-ble-read 0x0200 1 ssbms-status) t)
 (expect write-modes '(1))
+; Every setup failure reports the real stage/status and leaves the page out
+; of Connecting. The address can remain saved throughout these failures.
+(ssbms-ble-drop)
+(setq addr-a -1430532899)
+(setq addr-b -285277951)
+(setq ssbms-ble-relink nil)
+(loopforeach failure '(scan-refused refused connect-timeout mtu-timeout services characteristics no-service no-cccd subscribe) {
+    (setq setup-failure failure)
+    (setq progress-phases nil)
+    (setq warnings nil)
+    (expect (ssbms-ble-link) nil)
+    (expect (car progress-phases) 0)
+    (expect (> (length warnings) 0) t)
+    (expect (assoc blec-errors 'ssbms)
+        (match failure (scan-refused '(scan 9)) (refused '(connect 9)) (connect-timeout '(ble-connect-result timeout))
+            (mtu-timeout '(ble-mtu-result timeout)) (services '(ble-service 7))
+            (characteristics '(ble-characteristic 8)) (no-service '(service not-found))
+            (no-cccd '(cccd not-found)) (subscribe '(subscribe (15 5)))))
+    (ssbms-ble-drop)
+    (if (eq failure 'connect-timeout) {
+        (expect blec-connector 'orphan)
+        ; The pending completion must be identified as busy, not mistaken
+        ; for another active attempt or a missing advertisement.
+        (expect (ssbms-ble-link) nil)
+        (expect (assoc blec-errors 'ssbms) '(scan (busy nil orphan)))
+        (push '(ble-connect-result 65535 13))
+        (blec-pump)
+        (expect blec-connector nil)
+    })
+})
+(setq setup-failure nil)
+(expect (ssbms-ble-link) t)
 ; Cancellation stops waits promptly; cleanup disconnects and frees buffers.
 (setq answer nil)
 (setq cancel t)
@@ -278,4 +382,47 @@
 (expect ssbms-ble-ready nil)
 (expect ssbms-rx nil)
 (expect ssbms-transport-read nil)
+; Exercise the real worker: idle, one explicit scan, saved-peer retry, Forget.
+(def worker-mode nil)
+(def worker-sleeps 0)
+(def worker-forgot nil)
+(def worker-scans 0)
+(def worker-connects 0)
+(defun set-config (key value) (match key (ssbms-ble-paired-address-a (setq addr-a value))
+    (ssbms-ble-paired-address-b (setq addr-b value)) (_ nil)))
+(defun test-sleep (seconds) {
+    (setq now (+ now seconds))
+    (setq worker-sleeps (+ worker-sleeps 1))
+    (if (and (eq worker-mode 'picker) (= worker-sleeps 1)) (ssbms-ble-request-scan))
+    (if (and (eq worker-mode 'forget) connected (not worker-forgot)) {
+        (setq worker-forgot t)
+        (ssbms-ble-select 0 0)
+    })
+    (if (>= worker-sleeps 90) (setq enabled 0))
+})
+(loopforeach mode '(idle picker saved-missing forget) {
+    (setq worker-mode mode)
+    (setq worker-sleeps 0)
+    (setq worker-forgot nil)
+    (setq worker-scans scans)
+    (setq worker-connects connect-attempts)
+    (setq warnings nil)
+    (setq cancel nil)
+    (setq answer t)
+    (setq enabled 1)
+    (setq bms-stop-requested nil)
+    (setq ssbms-ble-relink nil)
+    (setq ssbms-ble-scan-requested nil)
+    (setq addr-a (match mode (saved-missing 0x01020304) (forget -1430532899) (_ 0)))
+    (setq addr-b (match mode (saved-missing 0x05060101) (forget -285277951) (_ 0)))
+    (ssbms-ble-loop)
+    (expect warnings nil)
+    (match mode
+        (idle (expect scans worker-scans))
+        (picker (expect scans (+ worker-scans 1)))
+        (saved-missing (expect (> scans (+ worker-scans 1)) t))
+        (forget { (expect scans (+ worker-scans 1)) (expect worker-forgot t) (expect connected nil) }))
+    (expect connect-attempts (+ worker-connects (if (eq mode 'forget) 1 0)))
+    (ssbms-ble-cleanup)
+})
 (check t)

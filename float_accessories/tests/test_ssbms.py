@@ -83,7 +83,7 @@ class SsbmsTests(unittest.TestCase):
     # ble-client-* and conf-get are not host builtins; the test defines fakes.
     @unittest.skipUnless(os.environ.get("LBM_TEST_RUNNER"), "Set LBM_TEST_RUNNER")
     def test_ble_link_reassembly_loss_and_cleanup(self):
-        self.run_lisp(CORE_FILES+["lib/adapters/ssbms-ble.lisp"], "tests/ssbms_ble.lisp")
+        self.run_lisp(CORE_FILES+["lib/ble-client.lisp", "lib/adapters/ssbms-ble.lisp"], "tests/ssbms_ble.lisp")
 
     def run_lisp(self, files, test):
         curves=(ROOT / "lib/vehicle.lisp").read_text()

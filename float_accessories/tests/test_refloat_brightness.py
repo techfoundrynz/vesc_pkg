@@ -14,7 +14,7 @@ class RefloatBrightnessTests(unittest.TestCase):
         files = [ROOT / "lib/bms-vars.lisp", ROOT / "lib/bms.lisp",
                  ROOT / "lib/bms-backend.lisp", ROOT / "lib/vehicle.lisp", ROOT / "lib/lighting-control.lisp",
                  ROOT / "lib/can.lisp", ROOT / "lib/adapters/refloat.lisp",
-                 ROOT / "lib/led-vars.lisp",
+                 ROOT.parent / "lib_esp_led_strip/esp_led_defs.lisp", ROOT / "lib/led-vars.lisp",
                  ROOT / "lib/led.lisp", ROOT / "tests/refloat_brightness.lisp"]
         program = "\n".join(p.read_text() for p in files)
         program = program.replace("@const-start", "").replace("@const-end", "")

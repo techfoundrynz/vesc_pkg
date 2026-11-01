@@ -31,9 +31,12 @@ UART from starting. u-blox on a different UART is independent.
 SSBMS BLE (`lib/adapters/ssbms-ble.lisp`) uses the VESC Express LispBM GATT
 client, so it needs Express firmware with `ble-client-*` and the Bluetooth
 LispBM role set to Client (2) or Client and server (3); the built-in VESC Tool
-BLE service can stay enabled. With a pinned BMS it actively scans for that
-address and address type only; with none pinned it takes the first local name
-containing SSBMS or XJBMS (case-insensitive). It then connects, exchanges MTU,
+BLE service can stay enabled. Client access goes through `lib/ble-client.lisp`.
+With a pinned BMS it actively scans for that
+address and address type only. With none pinned it stays idle until Scan is
+pressed; the picker lists local names containing SSBMS or XJBMS
+(case-insensitive), without connecting. Selecting Connect saves that peer.
+It then connects, exchanges MTU,
 discovers service `00002760-08c2-11e1-9073-0e8ac72e1001`, subscribes to the
 `…0002` reply notifications and writes requests to `…0001` without response
 (acknowledged writes if the BMS does not offer that). Notifications are
@@ -51,15 +54,48 @@ and `ssbms_ble_paired_address_b` (bytes 4-5, address type 0 public / 1 random, t
 when pinned); `0`/`0` means not pinned. The SSBMS BLE card's Scan button sends
 `(ssbms-ble-request-scan)`. The backend drops any link, scans for five seconds,
 reports each SSBMS/XJBMS once as `ssbms-found a b rssi name` and finishes with
-`ssbms-scan-done count` (`-1` when the backend is not running). Connect sends
+`ssbms-scan-done count` (`-1` when the backend is not running, `-2` when the
+scanner is busy or its request failed). Connect sends
 `(ssbms-ble-select a b)`: the device writes and stores the two ints itself,
 drops any link and reconnects to the new pin. This works with the backend
 stopped, so a stale pin can always be forgotten. It answers
 `ssbms-ble-selected 1|0 a b` (0 when nothing was saved, such as test mode
-refusing the write). The UI calls a pinned BMS "paired" and shows it, with
-Forget, whether or not it is currently connected. Forget is `(ssbms-ble-select 0 0)`. While
+refusing the write). The UI shows a pinned address as "Saved BMS", with
+Forget, whether or not it is currently connected. This is an address preference,
+not Bluetooth bonding. Forget is `(ssbms-ble-select 0 0)`; it drops the link
+and returns to idle until another Scan and selection. While
 connected it sends `ssbms-ble-link 1 a b rssi` once a second and
 `ssbms-ble-link 0 0 0 0` after a link ends.
+
+Enable BMS diagnostics in the UI or run `(dbg-add DBG-BMS)` in the Lisp console
+to trace scanning, peer address/type, connection handle, MTU, service discovery,
+characteristic handles, notification subscription and the first complete telemetry
+snapshot. Missing advertisements and a busy shared scanner are normal retry
+states, reported only through progress and BMS debug logging. Actual scan or
+connection setup failures emit warnings even when BMS debug logging is off. Warnings
+include the operation and native status, or a reason such as `timeout`,
+`events-lost`, `not-found` or `(busy scanner-owner connector-owner)`. An `orphan`
+connector means an earlier attempt is still awaiting its firmware completion.
+For example, `(connect 9)` is an immediate connection request rejection;
+`(ble-connect-result timeout)` means no completion arrived before the deadline.
+
+The page receives `ssbms-ble-progress phase message`: phases 1–5 cover scanning,
+connecting, MTU, discovery and subscription; 6 means the BLE transport is ready;
+0 means stopped or failed. A saved address alone does not imply Connecting or
+Connected. Connected requires a live link to that address; after a failed attempt
+the row offers Retry. A 20-second page watchdog clears stale Connecting progress
+and directs the user to the Lisp console; backend retry timing is independent.
+
+The BMS Config section shows an SSBMS Telemetry card for a connected UART or
+BLE BMS. It displays pack voltage, estimated SoC, every cell voltage, minimum,
+maximum and spread, charging current, charge permission and battery/MOSFET
+temperatures. While that section is open, `(ssbms-state)` requests a snapshot
+once per second. Its age comes from the last complete BMS update, rather than
+the UI request time, and continues increasing between responses. Readings older
+than three seconds are marked stale. If BLE remains linked while telemetry
+stops, the last complete sample remains visible with its age; disconnecting or
+stopping the backend clears it. A new link shows a waiting message until its
+first complete sample arrives.
 
 For either transport, the adapter reads the cell count (12–32), then complete
 cells + 16-register status cycles twice per second. There is one read

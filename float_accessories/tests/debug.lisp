@@ -1,0 +1,82 @@
+; Characterization of lib/debug.lisp: masks, throttling, prefixes, the page
+; message and the diag report.
+(def now 100.0)
+(def printed nil)
+(def sent nil)
+(defun test-print (text) (setq printed (cons text printed)))
+(defun test-clock () now)
+(defun test-age (stamp) (- now stamp))
+(defun send-data (text) (setq sent (cons text sent)))
+(defun expect (actual wanted)
+    (if (not (eq actual wanted)) (exit-error (to-str (list actual 'wanted wanted)))))
+
+; Masks: set clamps to DBG-ALL, add/del toggle one category, each change is
+; printed and pushed to the page.
+(expect dbg-mask 0)
+(expect (dbg-active DBG-LED) nil)
+(dbg-set 4096)
+(expect dbg-mask 0)
+(dbg-add DBG-LED)
+(expect dbg-mask 8)
+(expect (car printed) "dbg mask 8")
+(expect (car sent) "debug 8")
+(dbg-add DBG-BMS)
+(dbg-del DBG-LED)
+(dbg-del DBG-LED)
+(expect dbg-mask 16)
+(dbg-on)
+(expect dbg-mask DBG-ALL)
+(dbg-off)
+(expect dbg-mask 0)
+
+; Gated lines print only with their category on; errors and warnings always.
+(setq printed nil)
+(dbg DBG-CAN "hidden")
+(expect printed nil)
+(dbg-err "bad")
+(dbg-warn "odd")
+(expect printed '("WARN odd" "ERR bad"))
+(dbg-set DBG-CAN)
+(setq printed nil)
+(dbg DBG-CAN "shown")
+(expect printed '("shown"))
+
+; Throttle: at most once per interval per key; another key is independent;
+; a disabled category never consumes its slot.
+(expect (dbg-tick DBG-CAN 'can-tel 2.0) t)
+(expect (dbg-tick DBG-CAN 'can-tel 2.0) nil)
+(expect (dbg-tick DBG-CAN 'can-loop 2.0) t)
+(setq now 102.5)
+(expect (dbg-tick DBG-CAN 'can-tel 2.0) t)
+(expect (dbg-tick DBG-LED 'led-loop 1.0) nil)
+(dbg-add DBG-LED)
+(expect (dbg-tick DBG-LED 'led-loop 1.0) t)
+; A key nobody listed is throttled like any other.
+(expect (dbg-tick DBG-LED 'new-key 1.0) t)
+(expect (dbg-tick DBG-LED 'new-key 1.0) nil)
+; The heartbeat line keeps its format.
+(def pubmote-loop-ticks 3)
+(setq printed nil)
+(dbg-line (list "hz led" 50 "can" 20 "bms" 0 "rem" pubmote-loop-ticks "evt" 1))
+(expect (car printed) "hz led 50 can 20 bms 0 rem 3 evt 1")
+(dbg-off)
+
+; diag: a header, one line per block, then the mask. A block whose values are
+; unbound is skipped without cutting the report short.
+(def fw-num 6.05)
+(def pkg-version "1.2.3")
+(defun get-version () pkg-version)
+(def esp_led-version 4)
+(defun sysinfo (key) (if (eq key 'hw-target) "esp32s3" 160))
+(defun get-config (key) 7)
+(defun can-local-id () 9)
+(def integration-id 1)
+(def can-last-activity-time 99.0)
+(setq printed nil)
+(diag)
+(expect (ix (reverse printed) 0) "--- fa diag ---")
+(expect (car printed) "dbg mask 0")
+(expect (ix (reverse printed) 1) "ver 1.2.3 esp_led 4 fw 6.05 esp32s3 cpu 160 up 102.5")
+(expect (ix (reverse printed) 2) "canid 7 self 9 provider 1 canage 3.5")
+(expect (length printed) 4)
+(check t)

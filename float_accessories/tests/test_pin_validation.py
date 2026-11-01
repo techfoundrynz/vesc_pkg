@@ -112,5 +112,8 @@ for (const [target,max] of [['esp32c3',21],['esp32c6',30],['esp32s3',48],['esp32
 '''
         for widget in widgets:
             program += f"gpioTarget='esp32s3'; {widget}.value=22; assert(pinConfigurationError().includes('invalid')); {widget}.value=-1;\n"
-        result=subprocess.run([node,"-e",program],text=True,capture_output=True)
-        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        # Script via stdin as UTF-8 bytes: argv is encoded with the locale's
+        # codec, which fails on the UI's en dashes under a latin-1 locale.
+        result=subprocess.run([node,"-"],input=program.encode("utf-8"),capture_output=True)
+        output=(result.stdout+result.stderr).decode("utf-8",errors="replace")
+        self.assertEqual(result.returncode,0,output)

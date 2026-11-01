@@ -155,6 +155,74 @@
     (return true)
 })
 
+; Loop phases, one form each: a top-level form and its expansion are both live
+; in the small Lisp heap while it is defined, and pubmote loads late.
+
+; Send pair complete packets asynchronously without blocking QML.
+(defun pubmote-send-pair-complete () {
+    (var tmpbuf (bufcreate 2))
+    (bufset-u8 tmpbuf 0 PUBMOTE_CMD_PAIR_COMPLETE)
+    (bufset-u8 tmpbuf 1 pubmote-pair-complete-status)
+    (pubmote-log PUBMOTE_LOG_DEBUG "rem pair complete tx")
+    (pubmote-send-packet pubmote-remote-mac tmpbuf nil)
+    (if (connected-ble) (pubmote-send-packet '() tmpbuf t))
+    (free tmpbuf)
+    (setq pubmote-send-pair-complete-retries (- pubmote-send-pair-complete-retries 1))
+    ; Only wipe the MAC if no new pairing handshake has started in the
+    ; meantime (the deferred wipe must not clobber a fresh bond).
+    (if (and (= pubmote-send-pair-complete-retries 0) (= pubmote-pair-complete-status 0)
+             (= pubmote-pairing-state PUBMOTE_PAIR_IDLE))
+        (setq pubmote-remote-mac '()))
+})
+
+; Pairing search: broadcast our MAC at most every 50 ms of systime.
+(defun pubmote-pairing-broadcast () {
+    ; Update last activity time for pairing duration
+    (setq pubmote-last-activity-time (systime))
+    (if (> (- (systime) pubmote-last-pairing-broadcast) 50) {
+        (setq pubmote-last-pairing-broadcast (systime))
+        (if (pubmote-should-lock-channel) (pubmote-lock-channel "Begin pairing"))
+        (var pairing-data (bufcreate 8))
+        (bufset-u8 pairing-data 0 PUBMOTE_CMD_PAIR_INIT)
+        (var local-mac (get-mac-addr))
+        (looprange i 0 6 (bufset-u8 pairing-data (+ i 1) (ix local-mac i)))
+        ; Our actual WiFi channel, against channel switching races or channel
+        ; bleed; 0 without WiFi - BLE pairing ignores the byte.
+        (bufset-u8 pairing-data 7 (if pubmote-wifi-enabled (wifi-get-chan) 0))
+        (pubmote-send-packet pubmote-uni-mac pairing-data nil)
+        (if (connected-ble) (pubmote-send-packet '() pairing-data t))
+        (free pairing-data)
+    })
+})
+
+; Connected: push telemetry on the transport the remote paired with. Pushing
+; over BLE (rather than only replying to input packets) keeps the remote's
+; connection state solid even when a single packet is lost.
+(defun pubmote-send-core (data) {
+    (bufset-u8 data 0 PUBMOTE_CMD_SET_CORE_DATA)
+    (bufset-i32 data 1 (pubmote-get-cfg 'pubmote-secret-code))
+    (if (not-eq pubmote-get-telemetry nil)
+        (pubmote-serialize-telemetry data (pubmote-get-telemetry)))
+    (if (pubmote-log-tick 'rem-tx 2.0)
+        (pubmote-log PUBMOTE_LOG_DEBUG (str-merge "rem tx, last rx "
+            (str-from-n (secs-since pubmote-last-activity-time) "%.2f"))))
+    (if pubmote-ble-paired
+        (if (connected-ble) (pubmote-send-packet '() data t))
+        (pubmote-send-packet pubmote-remote-mac data nil))
+})
+
+(defun pubmote-tick (data) {
+    (if (> pubmote-send-pair-complete-retries 0) (pubmote-send-pair-complete))
+    ; Timeout pairing process after set time has passed
+    (if (and (> (secs-since pubmote-pairing-timer) pubmote-pairing-timer-timeout)
+             (>= pubmote-pairing-state PUBMOTE_PAIR_INITIATED))
+        (pubmote-pair -2))
+    (if (= pubmote-pairing-state PUBMOTE_PAIR_INITIATED) (pubmote-pairing-broadcast))
+    ; Bond in progress: keep the activity time fresh for the pairing duration.
+    (if (= pubmote-pairing-state PUBMOTE_PAIR_BONDING) (setq pubmote-last-activity-time (systime)))
+    (if (pubmote-should-send-message) (pubmote-send-core data))
+})
+
 (defun pubmote-loop () {
     (if (pubmote-init) {
         (setq pubmote-loop-delay (pubmote-get-cfg 'pubmote-loop-delay))
@@ -163,131 +231,24 @@
             (setq pubmote-loop-delay 30)
         })
         (var next-run-time (secs-since 0))
-        (var loop-start-time 0)
-        (var loop-end-time 0)
         (var pubmote-loop-delay-sec (/ 1.0 pubmote-loop-delay))
         (var data (bufcreate 34))
-
         (loopwhile t {
-                (if (pubmote-get-cfg 'pubmote-enabled) {
+            (if (pubmote-get-cfg 'pubmote-enabled) {
                 (setq pubmote-loop-ticks (+ pubmote-loop-ticks 1))
                 ; Check last pubmote activity
                 (pubmote-should-unlock-channel pubmote-last-activity-time)
                 (pubmote-log-transitions)
-
-                (setq loop-start-time  (secs-since 0))
-
                 ; Escape as needed
-                (if pubmote-exit-flag {
-                    (break)
-                })
-
-                ; Send pair complete packets asynchronously without blocking QML
-                (if (> pubmote-send-pair-complete-retries 0) {
-                    (var tmpbuf (bufcreate 2))
-                    (bufset-u8 tmpbuf 0 PUBMOTE_CMD_PAIR_COMPLETE)
-                    (bufset-u8 tmpbuf 1 pubmote-pair-complete-status)
-                    (pubmote-log PUBMOTE_LOG_DEBUG "rem pair complete tx")
-                    (pubmote-send-packet pubmote-remote-mac tmpbuf nil)
-                    (if (connected-ble) {
-                        (pubmote-send-packet '() tmpbuf t)
-                    })
-                    (free tmpbuf)
-                    (setq pubmote-send-pair-complete-retries (- pubmote-send-pair-complete-retries 1))
-
-                    (if (= pubmote-send-pair-complete-retries 0) {
-                        ; Only wipe the MAC if no new pairing handshake has
-                        ; started in the meantime (the deferred wipe must not
-                        ; clobber a fresh bond)
-                        (if (and (= pubmote-pair-complete-status 0) (= pubmote-pairing-state PUBMOTE_PAIR_IDLE)) {
-                            (setq pubmote-remote-mac '())
-                        })
-                    })
-                })
-
-                ; Timeout pairing process after set time has passed
-                (if (and (> (secs-since pubmote-pairing-timer) pubmote-pairing-timer-timeout) (>= pubmote-pairing-state PUBMOTE_PAIR_INITIATED)) {
-                    (pubmote-pair -2)
-                })
-
-                ; Pairing search
-                (if (= pubmote-pairing-state PUBMOTE_PAIR_INITIATED) {
-                    ; Update last activity time for pairing duration
-                    (setq pubmote-last-activity-time (systime))
-
-                    (if (> (- (systime) pubmote-last-pairing-broadcast) 50) {
-                        (setq pubmote-last-pairing-broadcast (systime))
-                        (if (pubmote-should-lock-channel) {
-                            (pubmote-lock-channel "Begin pairing")
-                        })
-
-                        (var pairing-data (bufcreate 8))
-
-                        (bufset-u8 pairing-data 0 PUBMOTE_CMD_PAIR_INIT)
-                        (var local-mac (get-mac-addr))
-
-                        (looprange i 0 6 {
-                            (bufset-u8 pairing-data (+ i 1) (ix local-mac i))
-                        })
-
-                        ; Append our actual WiFi channel to prevent race condition with channel switching or channel bleed
-                        ; send 0 there - BLE pairing ignores the byte
-                        (bufset-u8 pairing-data 7 (if pubmote-wifi-enabled (wifi-get-chan) 0))
-
-                        (pubmote-send-packet pubmote-uni-mac pairing-data nil)
-                        (if (connected-ble) {
-                            (pubmote-send-packet '() pairing-data t)
-                        })
-                        (free pairing-data)
-                    })
-                })
-
-                ; Bond in progress
-                (if (= pubmote-pairing-state PUBMOTE_PAIR_BONDING) {
-                    ; Update last activity time for pairing duration
-                    (setq pubmote-last-activity-time (systime))
-                })
-
-                ; Connected, send data
-                (if (pubmote-should-send-message) {
-                    (bufset-u8 data 0 PUBMOTE_CMD_SET_CORE_DATA)
-                    (bufset-i32 data 1 (pubmote-get-cfg 'pubmote-secret-code))
-
-                    (if (not-eq pubmote-get-telemetry nil) {
-                        (pubmote-serialize-telemetry data (pubmote-get-telemetry))
-                    })
-
-                    (if (pubmote-log-tick 'rem-tx 2.0) {
-                        (pubmote-log PUBMOTE_LOG_DEBUG (str-merge "rem tx, last rx "
-                            (str-from-n (secs-since pubmote-last-activity-time) "%.2f")))
-                    })
-                    ; Push telemetry on the transport the remote paired with.
-                    ; Pushing over BLE (rather than only replying to input
-                    ; packets) keeps the remote's connection state solid even
-                    ; when a single packet is lost.
-                    (if pubmote-ble-paired {
-                        (if (connected-ble) {
-                            (pubmote-send-packet '() data t)
-                        })
-                    } {
-                        (pubmote-send-packet pubmote-remote-mac data nil)
-                    })
-                })
-
-                (setq loop-end-time (secs-since 0))
-                (var actual-loop-time (- loop-end-time loop-start-time))
+                (if pubmote-exit-flag (break))
+                (pubmote-tick data)
                 (var time-to-wait (- next-run-time (secs-since 0)))
-
-                (if (> time-to-wait 0) {
+                (if (> time-to-wait 0)
                     (yield (* time-to-wait 1000000))
-                }{
-                    (setq next-run-time (secs-since 0))
-                })
-
+                    (setq next-run-time (secs-since 0)))
                 (setq next-run-time (+ next-run-time pubmote-loop-delay-sec))
             })
         })
-
         (free data)
         (setq pubmote-exit-flag nil)
     })

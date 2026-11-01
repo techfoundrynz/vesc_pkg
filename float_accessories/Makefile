@@ -3,13 +3,22 @@ PYTHON ?= python3
 LBM_TEST_RUNNER ?= /tmp/fa_lbm_runner
 
 # One binary per chip - native libs only run on the chip they were built for.
-ESP_TARGETS = esp32c3 esp32s3
+ESP_TARGETS = esp32c3 esp32c6 esp32s3
+PACKAGE_TARGET ?= all
+ifeq ($(PACKAGE_TARGET),all)
+PACKAGE_OUTPUTS = float_accessories.vescpkg $(addprefix float_accessories_,$(addsuffix .vescpkg,$(ESP_TARGETS)))
+else
+ifeq ($(filter $(PACKAGE_TARGET),esp32c3 esp32c6 esp32s3),)
+$(error PACKAGE_TARGET must be all, esp32c3, esp32c6 or esp32s3)
+endif
+PACKAGE_OUTPUTS = float_accessories_$(PACKAGE_TARGET).vescpkg
+endif
 
 # Single source of truth for the package version. It is stamped into the
 # generated README (build info) and into the About box in the UI.
 VERSION=`cat version`
 
-all: float_accessories.vescpkg
+all: $(PACKAGE_OUTPUTS)
 
 # Host-only regression suite; no firmware toolchain or connected device needed.
 test:
@@ -30,10 +39,10 @@ esp_led_libs:
 
 fa_cfg_libs: conf/confparser.c fa_cfg/datatypes.h
 	for t in $(ESP_TARGETS); do \
-		rm -f fa_cfg/*.o fa_cfg/*.d conf/*.o conf/*.d native/*.o native/*.d native/*/*.o native/*/*.d; \
+		rm -f fa_cfg/*.o fa_cfg/*.d conf/*.o conf/*.d native/*.o native/*.d native/ssbms/*.o native/ssbms/*.d native/ow_bms/*.o native/ow_bms/*.d; \
 		$(MAKE) -C fa_cfg ESP_TARGET=$$t || exit 1; \
 	done
-	rm -f fa_cfg/*.o fa_cfg/*.d conf/*.o conf/*.d native/*.o native/*.d native/*/*.o native/*/*.d
+	rm -f fa_cfg/*.o fa_cfg/*.d conf/*.o conf/*.d native/*.o native/*.d native/ssbms/*.o native/ssbms/*.d native/ow_bms/*.o native/ow_bms/*.d
 
 # Built from pkgdesc.qml rather than a --buildPkg string, so the package can
 # declare isCompatible and refuse non-Express hardware. --testPkgDesc runs that
@@ -58,16 +67,21 @@ ui.qml: ui.qml.in version README-gen.md gen_ui.py conf/pin_caps.py
 lib/version-gen.lisp: version gen_version.py
 	$(PYTHON) gen_version.py
 
-float_accessories.vescpkg: esp_led_libs fa_cfg_libs pkgdesc.qml README-gen.md ui.qml lib/version-gen.lisp compact_package.py
-	$(VESC_TOOL) --buildPkgFromDesc pkgdesc.qml \
-		--testPkgDesc 'custom:Devkit C3' \
-		--testPkgDesc 'custom:Avaspark RGB V3' \
-		--testPkgDesc 'vesc bms:VESC BMS' \
-		--testPkgDesc 'vesc:test'
-	$(PYTHON) compact_package.py $@
+PACKAGE_DEPS = esp_led_libs fa_cfg_libs pkgdesc.qml README-gen.md ui.qml lib/version-gen.lisp compact_package.py build_package.py
+
+float_accessories.vescpkg: $(PACKAGE_DEPS)
+	$(PYTHON) build_package.py --vesc-tool "$(VESC_TOOL)"
+
+# A target build needs only that chip's toolchain and native binaries.
+float_accessories_esp32c3.vescpkg: ESP_TARGETS = esp32c3
+float_accessories_esp32c6.vescpkg: ESP_TARGETS = esp32c6
+float_accessories_esp32s3.vescpkg: ESP_TARGETS = esp32s3
+float_accessories_%.vescpkg: $(PACKAGE_DEPS)
+	$(PYTHON) build_package.py --vesc-tool "$(VESC_TOOL)" --target "$*"
 
 clean:
 	rm -f float_accessories.vescpkg
+	rm -f float_accessories_esp32c3.vescpkg float_accessories_esp32c6.vescpkg float_accessories_esp32s3.vescpkg
 	rm -f README-gen.md ui.qml
 	for t in $(ESP_TARGETS); do \
 		$(MAKE) -C fa_cfg ESP_TARGET=$$t clean; \

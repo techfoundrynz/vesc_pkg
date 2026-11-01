@@ -1,6 +1,9 @@
 import importlib.util
+import os
 from pathlib import Path
 import struct
+import subprocess
+import tempfile
 import unittest
 import zlib
 
@@ -31,6 +34,59 @@ def unpack_fields(package):
 
 
 class CompactPackageTests(unittest.TestCase):
+    def test_target_build_keeps_features_and_only_matching_native_binaries(self):
+        root = b'''(import "fa_esp32c3.bin" 'native-c3)
+(import "fa_esp32c6.bin" 'native-c6)
+(import "fa_esp32s3.bin" 'native-s3)
+(import "ow.lisp" 'ow)(import "aux.lisp" 'aux)
+(read-eval-program ow)(read-eval-program aux)
+'''
+        imports = [(b"native-c3", b"\x01\x02\x03\0"),
+                   (b"native-c6", b"\x07\x08\x09\0"),
+                   (b"native-s3", b"\x04\x05\x06\0"),
+                   (b"ow", b"(def ow-enabled t)\0"),
+                   (b"aux", b"(def aux-enabled t)\0")]
+        original = package_fields([(b"name", b"Float Accessories"),
+                                   (b"lispData", compact.pack_lisp(b"\x12\x34", root, imports)),
+                                   (b"qmlFile", b"Item {}")])
+        for target, keep, remove in (("esp32c3", b"native-c3", b"native-s3"),
+                                     ("esp32c6", b"native-c6", b"native-c3"),
+                                     ("esp32s3", b"native-s3", b"native-c3")):
+            result, _, _ = compact.compact_package(original, target)
+            fields = dict(unpack_fields(result))
+            new_root, new_imports = compact.unpack_lisp(fields[b"lispData"])
+            self.assertEqual(dict(new_imports)[keep], dict(imports)[keep])
+            self.assertNotIn(remove, dict(new_imports))
+            self.assertNotIn(b"'" + remove, new_root)
+            self.assertIn(b"(read-eval-program ow)", new_root)
+            self.assertIn(b"(read-eval-program aux)", new_root)
+            self.assertIn(b'(def fa-package-target "' + target.encode() + b'")', new_root)
+            self.assertEqual(fields[b"qmlFile"], b"Item {}")
+            self.assertEqual(fields[b"lispData"][:2], b"\x12\x34")
+            self.assertEqual(compact.compact_package(result, target)[0], result)
+            other = "esp32s3" if target == "esp32c3" else "esp32c3"
+            with self.assertRaisesRegex(ValueError, "Cannot retarget"):
+                compact.compact_package(result, other)
+
+    @unittest.skipUnless(os.environ.get("LBM_TEST_RUNNER"), "Set LBM_TEST_RUNNER")
+    def test_target_guard_refuses_wrong_chip_before_loading_features(self):
+        source = b'(import "fa_esp32c3.bin" \'native)(def feature-loaded t)'
+        data = compact.pack_lisp(b"\0\0", source, [(b"native", b"\x01\0")])
+        root, _ = compact.unpack_lisp(compact.target_lisp(data, "esp32c3"))
+        for board, success in (("esp32c3", True), ("esp32s3", False)):
+            program = ('(defun sysinfo (key) "' + board + '")(defun import (path tag) t)\n').encode() + root
+            program += b"\n(check feature-loaded)"
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "target.lisp"
+                path.write_bytes(program)
+                result = subprocess.run([os.environ["LBM_TEST_RUNNER"], str(path)],
+                                        text=True, capture_output=True, timeout=15)
+                if success:
+                    self.assertIn("SUCCESS", result.stdout)
+                else:
+                    self.assertNotIn("SUCCESS", result.stdout)
+                    self.assertIn("This package requires esp32c3", result.stdout)
+
     def test_source_preserves_strings_and_imports(self):
         original = b'''; whole-line comment
   (import "lib/test.lisp" 'test) ; keep this import
@@ -77,9 +133,55 @@ class CompactPackageTests(unittest.TestCase):
         self.assertIn(b'(import "native.bin"', new_root)
         self.assertIn(b'(import "lib/module.lisp"', new_root)
         self.assertEqual(new_imports[0], imports[0])
-        self.assertEqual(new_imports[1][1], compact.reduce_source(imports[1][1]) + b"\0")
+        self.assertEqual(new_imports[1][1], compact.tighten_source(imports[1][1]) + b"\0")
         self.assertEqual(new_imports[2][1], b"(def answer 42)\n\0")
         self.assertEqual(compact.compact_package(result)[0], result)
+
+    def test_tightening_preserves_tokens_strings_and_directives(self):
+        source = b'''@const-start
+ (def text " spaces (and braces {}) ; inside string ")
+ (def escaped "escaped \\\" quote")
+ (def xs '( 1 2 (3 4) ))
+ (def bytes [1 2 3])
+ (defun value (x) { (+ x 1) })
+@const-end
+'''
+        tight = compact.tighten_source(source)
+        self.assertEqual(compact.source_tokens(tight), compact.source_tokens(source))
+        self.assertLess(len(tight), len(compact.reduce_source(source)))
+        self.assertIn(b'" spaces (and braces {}) ; inside string "', tight)
+        self.assertEqual(compact.tighten_source(tight), tight)
+
+    def test_tight_root_still_identifies_every_text_import(self):
+        root = b'''(import "native.bin" 'native)(import "module.lisp" 'module)
+(def text "(import \\\"not-a-module.lisp\\\" 'native)")
+'''
+        imports = [(b"native", b"\xff\0; binary"),
+                   (b"module", b"; comment\n (def answer 42)\n\0")]
+        result = compact.compact_lisp(compact.pack_lisp(b"\0\0", root, imports))
+        _, decoded = compact.unpack_lisp(result)
+        self.assertEqual(decoded[0], imports[0])
+        self.assertEqual(decoded[1][1], b"(def answer 42)\n\0")
+        self.assertEqual(compact.compact_lisp(result), result)
+
+    @unittest.skipUnless(os.environ.get("LBM_TEST_RUNNER"), "Set LBM_TEST_RUNNER")
+    def test_tight_source_with_real_incremental_reader(self):
+        source = b'''@const-start
+ (def xs '(1 2 (3 4)))
+ (def bytes [1 2 3])
+ (def text " keep ; {} (spaces) ")
+ (defun plus (a b) { (+ a b) })
+@const-end
+(check (and (= (plus 2 3) 5) (= (bufget-u8 bytes 1) 2)
+            (eq xs '(1 2 (3 4))) (eq text " keep ; {} (spaces) ")))
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tight.lisp"
+            path.write_bytes(compact.tighten_source(source))
+            result = subprocess.run([os.environ["LBM_TEST_RUNNER"], "-i", str(path)],
+                                    text=True, capture_output=True, timeout=15)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("SUCCESS", result.stdout)
 
     def test_import_offsets_are_four_byte_aligned(self):
         for root_length in range(1, 9):

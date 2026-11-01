@@ -1,6 +1,8 @@
 (import "fa_cfg/fa_cfg_esp32c3.bin" 'facfg-esp32c3)
+(import "fa_cfg/fa_cfg_esp32c6.bin" 'facfg-esp32c6)
 (import "fa_cfg/fa_cfg_esp32s3.bin" 'facfg-esp32s3)
 (import "../lib_esp_led_strip/esp_led_strip/esp_led_strip_esp32c3.bin" 'esp_led-esp32c3)
+(import "../lib_esp_led_strip/esp_led_strip/esp_led_strip_esp32c6.bin" 'esp_led-esp32c6)
 (import "../lib_esp_led_strip/esp_led_strip/esp_led_strip_esp32s3.bin" 'esp_led-esp32s3)
 
 @const-start
@@ -13,6 +15,7 @@
 (import "lib/utils.lisp" 'utils)
 (import "lib/settings-vars.lisp" 'settings-vars)
 (import "lib/settings.lisp" 'settings)
+(import "lib/ble-client.lisp" 'ble-client)
 ; bms
 (import "lib/bms-vars.lisp" 'bms-vars)
 (import "lib/bms.lisp" 'bms)
@@ -54,22 +57,31 @@
 (import "lib/entry/app.lisp" 'entry-app)
 
 (read-eval-program entry-core)
+(print "FA loaded core")
 (read-eval-program entry-bms)
+(print "FA loaded bms")
 (read-eval-program entry-vehicle)
+(print "FA loaded vehicle")
 (read-eval-program entry-telemetry)
+(print "FA loaded telemetry")
 (read-eval-program entry-led)
+(print "FA loaded led")
 (read-eval-program entry-pubmote)
+(print "FA loaded pubmote")
 (read-eval-program entry-app)
+(print "FA loaded app")
 
 (defun load-native-libs () {
+    (check-platform)
     (var target (sysinfo 'hw-target))
     (var libs (cond
         ((= (str-cmp target "esp32c3") 0) (list facfg-esp32c3 esp_led-esp32c3))
+        ((= (str-cmp target "esp32c6") 0) (list facfg-esp32c6 esp_led-esp32c6))
         ((= (str-cmp target "esp32s3") 0) (list facfg-esp32s3 esp_led-esp32s3))
         (t nil)
     ))
     (if (eq libs nil) {
-        (exit-error (str-merge "No native libs for target " target " (this build bundles esp32c3 and esp32s3)"))
+        (exit-error (str-merge "No native libs for target " target " (supported: esp32c3, esp32c6, esp32s3)"))
     })
     (var r-cfg (trap (load-native-lib (ix libs 0))))
     (if (eq (ix r-cfg 0) 'exit-error)
@@ -88,9 +100,16 @@
 (def boot-t-main 0.0)
 (def boot-t-libs 0.0)
 (def boot-t-led 0.0)
+; Saved as nil: only the cold start announces creation, until QML acknowledges.
+(def startup-image-created nil)
 
-(defun main () {
+(defun main () (run-main t))
+
+; A saved image must reload native code, whose executable addresses can change.
+; The first parse has already loaded it before saving the extension table.
+(defun run-main (reload-libs) {
     (setq boot-t-main (secs-since 0))
+    (if reload-libs (load-native-libs))
     (setup)
     (init)
     (print (str-merge "Boot " (str-from-n (secs-since 0) "%.3f") "s"
@@ -99,9 +118,10 @@
         " led " (str-from-n (- boot-t-led boot-t-libs) "%.3f")
         " rest " (str-from-n (- (secs-since 0) boot-t-led) "%.3f") ")"))
 })
+; Native loops avoid a persistent macro closure per monitor on the small C3 heap.
 (defun spawn-with-restart (name stack-size func) {
     (var monitor-fn (fn ()
-        (loopwhile t {
+        (loop () t {
             (if stack-size
                 (spawn-trap stack-size func)
                 (spawn-trap func))
@@ -129,7 +149,7 @@
 ; recv only matches exit messages) would silently swallow every event.
 (defun spawn-event-handler-with-restart () {
     (spawn (fn ()
-        (loopwhile t {
+        (loop () t {
             (event-register-handler (spawn-trap event-handler))
             (dbg DBG-CORE "spawn event-handler")
             (recv   ((exit-error (? tid) (? e))
@@ -141,24 +161,26 @@
     ))
 })
 
-(defun setup () {
+(defun check-platform () {
     ; fw-num is a global (settings-vars.lisp): bms.lisp gates two crypto
     ; paths on it, and as a local `var` here it was unbound by the time the
     ; BMS loop read it.
     (setq fw-num (+ (first (sysinfo 'fw-ver)) (* (second (sysinfo 'fw-ver)) 0.01)))
+    (if (!= (str-cmp (to-str (sysinfo 'hw-type)) "hw-express") 0) {
+        (exit-error "Not running on hw-express")
+    })
+
+    (if (< fw-num 7.00) (exit-error "hw-express needs to be running 7.00"))
+})
+
+(defun setup () {
+    (check-platform)
     (print (str-merge "Float Accessories " (to-str (get-version))
         " on " (sysinfo 'hw-target)
         " fw " (str-from-n fw-num "%.2f")))
 
     (setq led-last-activity-time (systime))
 
-    (if (!= (str-cmp (to-str (sysinfo 'hw-type)) "hw-express") 0) {
-        (exit-error "Not running on hw-express")
-    })
-
-    (if (< fw-num 7.00) (exit-error "hw-express needs to be running 7.00"))
-
-    (load-native-libs)
     (setq boot-t-libs (secs-since 0))
     (integration-select (get-config 'integration))
     (apply-battery-config (get-config 'soc-type) (get-config 'cell-type))
@@ -188,6 +210,28 @@
     (event-enable 'event-esp-now-rx)
 })
 
+; Always inject the pubmote callbacks. Its own form, not part of init: init is
+; the last thing defined, with the least Lisp heap left, and a top-level form
+; and its expansion are both live while it is defined.
+(defun init-pubmote ()
+    (pubmote-setup (list
+        (cons 'vehicle-type PUBMOTE_VEHICLE_ONEWHEEL)
+        (cons 'on-control (fn (jsy jsx bt-c bt-z is-rev)
+            (remote-input jsy jsx bt-c bt-z is-rev)))
+        (cons 'get-telemetry (fn ()
+            (list fault-code pitch-angle roll-angle state switch-state vin rpm speed tot-current duty-cycle-now (phase-utilization) (battery-utilization) distance-abs fet-temp-filtered motor-temp-filtered odometer battery-percent-remaining)))
+        (cons 'send-msg send-msg)
+        (cons 'get-config get-config)
+        (cons 'set-config set-config)
+        (cons 'save-config (fn () (ext-facfg-store)))
+        (cons 'on-pairing-state (fn (state) (send-data (str-merge "pairing-status " (to-str state)))))
+        (cons 'log (fn (level text)
+            (cond ((= level PUBMOTE_LOG_ERROR) (dbg-err text))
+                  ((= level PUBMOTE_LOG_WARN) (dbg-warn text))
+                  ((= level PUBMOTE_LOG_INFO) (print text))
+                  (t (dbg DBG-REM text)))))
+        (cons 'log-active (fn () (dbg-active DBG-REM))))))
+
 (defun init () {
     ; The heartbeat thread first, so a crash in any loop spawned below is
     ; visible as a dead tick counter straight away.
@@ -197,43 +241,7 @@
     ; starts it before any of this, so the lights are already on while CAN
     ; discovery and the rest of the peripherals come up behind them.
     (setq can-context-id (spawn-with-restart "can-loop" nil can-loop))
-    ; Always inject the pubmote callbacks
-    (pubmote-setup (list
-        (cons 'vehicle-type PUBMOTE_VEHICLE_ONEWHEEL)
-        (cons 'on-control (fn (jsy jsx bt-c bt-z is-rev) {
-            (setq pubmote-last-jsy jsy)
-            (setq pubmote-last-jsx jsx)
-            (setq pubmote-last-bt-c bt-c)
-            (setq pubmote-last-bt-z bt-z)
-            (setq pubmote-last-is-rev is-rev)
-            (integration-control jsy jsx bt-c bt-z is-rev)
-        }))
-        (cons 'get-telemetry (fn () {
-            (list fault-code pitch-angle roll-angle state switch-state vin rpm speed tot-current duty-cycle-now (phase-utilization) (battery-utilization) distance-abs fet-temp-filtered motor-temp-filtered odometer battery-percent-remaining)
-        }))
-        (cons 'send-msg (fn (text) {
-            (send-msg text)
-        }))
-        (cons 'get-config (fn (name) {
-            (get-config name)
-        }))
-        (cons 'set-config (fn (name val) {
-            (set-config name val)
-        }))
-        (cons 'save-config (fn () {
-            (ext-facfg-store)
-        }))
-        (cons 'on-pairing-state (fn (state) {
-            (send-data (str-merge "pairing-status " (to-str state)))
-        }))
-        (cons 'log (fn (level text) {
-            (cond ((= level PUBMOTE_LOG_ERROR) (dbg-err text))
-                  ((= level PUBMOTE_LOG_WARN) (dbg-warn text))
-                  ((= level PUBMOTE_LOG_INFO) (print text))
-                  (t (dbg DBG-REM text)))
-        }))
-        (cons 'log-active (fn () (dbg-active DBG-REM)))
-    ))
+    (init-pubmote)
     (if (= (get-config 'pubmote-enabled) 1){
         (setq pubmote-context-id (spawn-with-restart "pubmote-loop" nil pubmote-loop))
     })
@@ -251,7 +259,13 @@
 
 @const-end
 
-; Finish constant definitions before saving or running startup. A failed save
-; can leave a partial image with main present, so never continue silently.
+; Register native extension names before saving the table. Otherwise each warm
+; boot appends their names to flash again. main reloads/rebinds their executable
+; code on image boots; this first start reuses the libraries just loaded here.
+(load-native-libs)
+(print "FA saving startup image")
 (if (not (image-save)) (exit-error "Could not save startup image"))
-(main)
+(print "FA startup image saved")
+(setq startup-image-created t)
+(send-data "fa-image-created")
+(run-main nil)

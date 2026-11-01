@@ -24,7 +24,7 @@
 )
 
 (defun event-handler ()
-    (loopwhile t
+    (loop () t
         (recv
             ((event-esp-now-rx (? src) (? des) (? data) (? rssi)) {
                 (if (!= dbg-mask 0) (setq dbg-ticks-evt (+ dbg-ticks-evt 1)))

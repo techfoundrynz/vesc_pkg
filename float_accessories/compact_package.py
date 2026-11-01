@@ -2,6 +2,7 @@
 """Remove source overhead from a built .vescpkg while preserving imports.
 
 Usage: python compact_package.py float_accessories.vescpkg [output.vescpkg]
+       python compact_package.py input.vescpkg output.vescpkg --target esp32c3
 
 The Lisp source, imported buffers and saved runtime image share flash space.
 VESC Tool's --reduceLisp also removes import statements, which this firmware's
@@ -63,6 +64,17 @@ def source_tokens(data):
                       reduce_source(data), re.DOTALL)
 
 
+def tighten_source(data):
+    """Keep token separators only where Lisp's delimiters do not suffice."""
+    result = bytearray()
+    delimiters = (b"(", b")", b"{", b"}")
+    for token in source_tokens(data):
+        if result and result[-1:] not in delimiters and token[:1] not in delimiters:
+            result += b" "
+        result += token
+    return bytes(result) + b"\n"
+
+
 def unpack_lisp(data):
     root, offset = read_string(data, 2)  # Keep the two flag bytes.
     count = struct.unpack_from(">H", data, offset)[0]
@@ -99,20 +111,26 @@ def pack_lisp(flags, root, imports):
 
 def compact_lisp(data):
     root, imports = unpack_lisp(data)
-    # Match the literal import syntax accepted by VESC Tool's package builder.
-    text_names = {name.encode("utf-8") for path, name in re.findall(
-        r'^\s*\(import\s+"([^"\n]+)"\s+\'([^\s)]+)\s*\)',
-        root.decode("utf-8"), re.MULTILINE)
-        if path.lower().endswith((".lisp", ".lbm"))}
+    # Read literal import forms even after tightening puts them on one line.
+    # Tokens also keep import-like text inside strings/comments out of this set.
+    tokens = source_tokens(root)
+    text_names = set()
+    for i in range(len(tokens) - 4):
+        form = tokens[i:i + 5]
+        if (form[:2] == [b"(", b"import"] and form[4] == b")"
+                and form[2].startswith(b'"') and form[2].endswith(b'"')
+                and form[2][1:-1].lower().endswith((b".lisp", b".lbm"))
+                and form[3].startswith(b"'")):
+            text_names.add(form[3][1:])
     compact_imports = []
     for name, payload in imports:
         if name in text_names:
-            reduced = reduce_source(payload)
+            reduced = tighten_source(payload)
             if source_tokens(payload) != source_tokens(reduced):
                 raise ValueError("Lisp tokens changed while reducing " + name.decode())
             payload = reduced + b"\0"
         compact_imports.append((name, payload))
-    reduced_root = reduce_source(root)
+    reduced_root = tighten_source(root)
     if source_tokens(root) != source_tokens(reduced_root):
         raise ValueError("Root Lisp tokens changed during reduction")
     result = pack_lisp(data[:2], reduced_root, compact_imports)
@@ -123,7 +141,48 @@ def compact_lisp(data):
     return result
 
 
-def compact_package(package):
+TARGETS = ("esp32c3", "esp32c6", "esp32s3")
+
+
+def target_lisp(data, target):
+    """Keep every Lisp feature, but only native binaries for this chip."""
+    if target not in TARGETS:
+        raise ValueError("Unsupported package target: " + target)
+    root, imports = unpack_lisp(data)
+    tokens = source_tokens(root)
+    marker = [b"(", b"def", b"fa-package-target", ('"' + target + '"').encode(), b")"]
+    already_targeted = tokens[:3] == marker[:3]
+    if already_targeted and tokens[:5] != marker:
+        raise ValueError("Cannot retarget an already specialized package")
+    kept, dropped, found = [], set(), False
+    i = 0
+    while i < len(tokens):
+        form = tokens[i:i + 5]
+        if (len(form) == 5 and form[:2] == [b"(", b"import"] and form[4] == b")"
+                and form[2].startswith(b'"') and form[3].startswith(b"'")):
+            path = form[2][1:-1]
+            chip = next((t for t in TARGETS if path.endswith(("_" + t + ".bin").encode())), None)
+            if chip:
+                if chip != target:
+                    dropped.add(form[3][1:])
+                    i += 5
+                    continue
+                found = True
+        kept.append(tokens[i])
+        i += 1
+    if not found:
+        raise ValueError("Package has no native imports for " + target)
+    root = tighten_source(b" ".join(kept))
+    if not already_targeted:
+        # Refuse the wrong chip before importing or starting any hardware.
+        guard = ('(def fa-package-target "' + target + '")'
+                 '(if (!= (str-cmp (sysinfo \'hw-target) fa-package-target) 0)'
+                 ' (exit-error "This package requires ' + target + '"))\n').encode()
+        root = tighten_source(guard + root)
+    return pack_lisp(data[:2], root, [(n, p) for n, p in imports if n not in dropped])
+
+
+def compact_package(package, target=None):
     raw = zlib.decompress(package[4:])
     if struct.unpack_from(">I", package)[0] != len(raw):
         raise ValueError("Incorrect package uncompressed size")
@@ -143,7 +202,13 @@ def compact_package(package):
         if name == b"lispData":
             before = len(data)
             data = compact_lisp(data)
+            if target:
+                data = target_lisp(data, target)
             after = len(data)
+        elif name == b"name" and target:
+            suffix = (" (" + target.upper().replace("ESP32", "ESP32-") + ")").encode()
+            if not data.endswith(suffix):
+                data += suffix
         output += name + b"\0" + struct.pack(">I", len(data)) + data
     if before is None:
         raise ValueError("Package contains no Lisp data")
@@ -155,8 +220,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("package", type=Path)
     parser.add_argument("output", type=Path, nargs="?")
+    parser.add_argument("--target", choices=TARGETS,
+                        help="omit the other chip's native binaries; all features remain enabled")
     args = parser.parse_args()
-    result, before, after = compact_package(args.package.read_bytes())
+    result, before, after = compact_package(args.package.read_bytes(), args.target)
     output = args.output or args.package
     # Never leave a partially written package at the final path.
     with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as temp:

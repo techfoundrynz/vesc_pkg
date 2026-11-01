@@ -116,22 +116,8 @@
 ; Logged unconditionally at DBG-LED: "my strip doesn't light up" is almost always
 ; a segment that was never defined because timing was 0, the pin was -1 or the
 ; LED count was 0 - and that is invisible from the outside.
-(defun log-seg (i name pin type num off timing) {
-    (dbg DBG-LED (str-merge "led seg " (str-from-n i "%d") " " name
-        " pin " (str-from-n pin "%d")
-        " type " (str-from-n type "%d")
-        " n " (str-from-n num "%d")
-        " off " (str-from-n off "%d")
-        " tim " (str-from-n timing "%d")))
-})
-
-(defun log-skip (name pin num timing) {
-    (if (dbg-active DBG-LED)
-        (dbg DBG-LED (str-merge "led seg - " name
-            " pin " (str-from-n pin "%d")
-            " n " (str-from-n num "%d")
-            " tim " (str-from-n timing "%d"))))
-})
+(defun log-skip (name pin num timing)
+    (if (dbg-active DBG-LED) (dbg-line (list "led seg -" name "pin" pin "n" num "tim" timing))))
 
 ; Embedded highbeam positions, unpacked from the config int: one per byte, 255 =
 ; unused. Filtered against the strip rather than passed through - the lib
@@ -184,10 +170,8 @@
         (var typ (if adopt-type chained type))
         (var i seg-idx)
         (if (dbg-active DBG-LED) {
-            (log-seg i name pin typ num off tim)
-            (if (= hb-mode 2)
-                (dbg DBG-LED (str-merge "led hb " name
-                    " pos " (to-str ps))))
+            (dbg-line (list "led seg" i name "pin" pin "type" typ "n" num "off" off "tim" tim))
+            (if (= hb-mode 2) (dbg-line (list "led hb" name "pos" (to-str ps))))
         })
         (ext-esp_led-seg-def i pin typ num off tim)
         (if ps (overlay-def i ps))
@@ -196,22 +180,10 @@
     })
 })
 
-; Define the esp_led segments from the config. Strips sharing a pin become one
-; chain: each next strip on the pin gets the accumulated pixel offset. Chain
-; order matches the original wiring convention: status, front, rear, then footpad
-; and button.
-(defun led-setup-segments () {
-    (ext-esp_led-deinit)
-    ; deinit/init resets the lib's segment state, so nothing the appearance
-    ; cache remembers is true of the new segments.
-    (seg-cache-reset)
-    (setq seg-idx 0)
-    (setq pin-offsets nil)
-    (setq pin-timings nil)
-    (setq pin-types nil)
-
-    ; The button LED has no LED-count setting - it is always one pixel - and no
-    ; colour-order setting, hence the 1 and the adopt-type flag.
+; The strips in chain order: status, front, rear, then footpad and button.
+; The button LED has no LED-count setting - it is always one pixel - and no
+; colour-order setting, hence the 1 and the adopt-type flag.
+(defun led-define-strips () {
     (setq seg-status (led-def-strip "status" led-status-pin led-status-num
         led-status-type led-status-timing 0 0 nil))
     (setq seg-front (led-def-strip "front" led-front-pin led-front-num
@@ -222,10 +194,13 @@
         led-footpad-type led-footpad-timing 0 0 nil))
     (setq seg-button (led-def-strip "button" led-button-pin 1
         TYPE-GRB led-button-timing 0 0 t))
+})
 
-    ; Whether the lib is actually rendering, which is not the same as having
-    ; defined segments: init rejects a chain whose segments disagree on colour
-    ; depth or timing, and every strip goes dark together when it does.
+; Start the lib on the defined segments; t when it is actually rendering, which
+; is not the same as having defined segments: init rejects a chain whose
+; segments disagree on colour depth or timing, and every strip goes dark
+; together when it does. Reverse flags have to go on after init.
+(defun led-start-lib () {
     (var started nil)
     (if (> seg-idx 0) {
         (var r (trap (ext-esp_led-init seg-idx)))
@@ -240,34 +215,41 @@
         ; do nothing at all, which looks identical to a crash.
         (dbg-warn "led no strip configured")
     })
-
-    ; Reverse flags have to go on after init, which is why they are not part of
-    ; led-def-strip. The button LED is one pixel, so it has no flag.
     (if started {
         (ext-esp_led-fps 60)
-        ; (ext-esp_led-refresh 250)
         ; Front and rear ease their colour instead of switching it, so a reversal
         ; crossfades white/red rather than swapping in one frame. The rate is
-        ; 32nds of the remaining gap per 33 ms, and the render thread runs at
-        ; 60 fps, so 10 settles a full white-to-red swing in about 0.5 s. Left
-        ; instant everywhere else: the status bar's colours are information, and
-        ; an alarm that fades in reads as a slow alarm.
+        ; 32nds of the remaining gap per 33 ms at 60 fps, so 10 settles a full
+        ; white-to-red swing in about 0.5 s. Left instant everywhere else: the
+        ; status bar's colours are information, and an alarm that fades in reads
+        ; as a slow alarm. The button LED is one pixel, so it has no reverse flag.
         (if (>= seg-front 0) (ext-esp_led-seg-color-fade seg-front 10))
         (if (>= seg-rear 0) (ext-esp_led-seg-color-fade seg-rear 10))
-        (if (>= seg-status 0) (ext-esp_led-seg-reverse seg-status led-status-reversed))
-        (if (>= seg-front 0) (ext-esp_led-seg-reverse seg-front led-front-reversed))
-        (if (>= seg-rear 0) (ext-esp_led-seg-reverse seg-rear led-rear-reversed))
-        (if (>= seg-footpad 0) (ext-esp_led-seg-reverse seg-footpad led-footpad-reversed))
+        (loopforeach r (list (cons seg-status led-status-reversed) (cons seg-front led-front-reversed)
+                             (cons seg-rear led-rear-reversed) (cons seg-footpad led-footpad-reversed))
+            (if (>= (car r) 0) (ext-esp_led-seg-reverse (car r) (cdr r))))
     })
+    started
+})
 
-    ; PWM highbeams (highbeam mode 1)
-    (if (and (= led-front-highbeam-mode 1) (>= led-front-highbeam-pin 0)) {
-        (pwm-start 1000 0.0 0 led-front-highbeam-pin 10)
-    })
-    (if (and (= led-rear-highbeam-mode 1) (>= led-rear-highbeam-pin 0)) {
-        (pwm-start 1000 0.0 1 led-rear-highbeam-pin 10)
-    })
-
+; Define the esp_led segments from the config. Strips sharing a pin become one
+; chain: each next strip on the pin gets the accumulated pixel offset.
+(defun led-setup-segments () {
+    (ext-esp_led-deinit)
+    ; deinit/init resets the lib's segment state, so nothing the appearance
+    ; cache remembers is true of the new segments.
+    (seg-cache-reset)
+    (setq seg-idx 0)
+    (setq pin-offsets nil)
+    (setq pin-timings nil)
+    (setq pin-types nil)
+    (led-define-strips)
+    (var started (led-start-lib))
+    ; PWM highbeams (highbeam mode 1): channel 0 front, 1 rear.
+    (if (hb-pwm-pin led-front-highbeam-mode led-front-highbeam-pin)
+        (pwm-start 1000 0.0 0 led-front-highbeam-pin 10))
+    (if (hb-pwm-pin led-rear-highbeam-mode led-rear-highbeam-pin)
+        (pwm-start 1000 0.0 1 led-rear-highbeam-pin 10))
     started
 })
 
@@ -302,11 +284,14 @@
 (defun led-teardown () {
     (setq led-setup-done nil)
     (ext-esp_led-deinit)
-    (if (and (= led-front-highbeam-mode 1) (>= led-front-highbeam-pin 0)) (pwm-stop 0))
-    (if (and (= led-rear-highbeam-mode 1) (>= led-rear-highbeam-pin 0)) (pwm-stop 1))
+    (if (hb-pwm-pin led-front-highbeam-mode led-front-highbeam-pin) (pwm-stop 0))
+    (if (hb-pwm-pin led-rear-highbeam-mode led-rear-highbeam-pin) (pwm-stop 1))
 })
 
 (defun bri255 (b) (to-i (* 255.0 (min (max b 0.0) 1.0))))
+
+; A highbeam on its own PWM pin (mode 1).
+(defun hb-pwm-pin (mode pin) (and (= mode 1) (>= pin 0)))
 
 ; Last PWM highbeam duty per channel, -1 = unknown.
 (def hb-duty-front -1.0)
@@ -412,33 +397,22 @@
         (if (= (bufget-u8 seg-want-set s) 1) {
             (bufset-u8 seg-want-set s 0)
             (var o (* s 8))
-            (var fx (bufget-u8 seg-want-look o))
-            (var pal (bufget-u8 seg-want-look (+ o 1)))
-            (var spd (bufget-u8 seg-want-look (+ o 2)))
-            (var bri (bufget-u8 seg-want-look (+ o 3)))
-            (var val (bufget-u8 seg-want-look (+ o 4)))
-            (var cyc (bufget-u16 seg-want-look (+ o 6)))
             (var color (bufget-u32 seg-want-col (* s 4)))
-            (if (or (!= (bufget-u8 seg-cache o) fx)
-                    (!= (bufget-u8 seg-cache (+ o 1)) pal)
-                    (!= (bufget-u8 seg-cache (+ o 2)) spd)
-                    (!= (bufget-u8 seg-cache (+ o 3)) bri)
-                    (!= (bufget-u8 seg-cache (+ o 4)) val)
-                    (!= (bufget-u16 seg-cache (+ o 6)) cyc)
+            ; Byte 5 is padding: zero in the want buffer and copied with the
+            ; rest, so comparing the look as two words is exact.
+            (if (or (!= (bufget-u32 seg-cache o) (bufget-u32 seg-want-look o))
+                    (!= (bufget-u32 seg-cache (+ o 4)) (bufget-u32 seg-want-look (+ o 4)))
                     (!= (bufget-u32 seg-cache-col (* s 4)) color)) {
                 ; One call, not five: seg-look sets the whole appearance under a
                 ; single lock acquisition in the lib. The cycle time rides along
                 ; as the 7th argument because the lib applies it before deciding
                 ; how to restart the effect - pushed as its own call it would
                 ; land one call too late to line this segment up with the others.
-                (ext-esp_led-seg-look s fx pal color spd bri cyc)
-                (ext-esp_led-seg-fx-val s val)
-                (bufset-u8 seg-cache o fx)
-                (bufset-u8 seg-cache (+ o 1) pal)
-                (bufset-u8 seg-cache (+ o 2) spd)
-                (bufset-u8 seg-cache (+ o 3) bri)
-                (bufset-u8 seg-cache (+ o 4) val)
-                (bufset-u16 seg-cache (+ o 6) cyc)
+                (ext-esp_led-seg-look s (bufget-u8 seg-want-look o) (bufget-u8 seg-want-look (+ o 1))
+                    color (bufget-u8 seg-want-look (+ o 2)) (bufget-u8 seg-want-look (+ o 3))
+                    (bufget-u16 seg-want-look (+ o 6)))
+                (ext-esp_led-seg-fx-val s (bufget-u8 seg-want-look (+ o 4)))
+                (bufcpy seg-cache o seg-want-look o 8)
                 (bufset-u32 seg-cache-col (* s 4) color)
             })
         })
@@ -499,70 +473,42 @@
 (def CYC-RAINBOW      4224) ; was spd 32
 (def CYC-RAINBOW-SLOW 16896) ; was spd 8 - trans pride
 
-; Head/tail pattern per LED mode. head-seg faces the direction of travel.
+; Immutable mode patterns: effect, palette, head/tail color, cycle in ms.
+; Built once in the constant heap; drawing allocates no pattern lists per tick.
+; Battery (1) and directional rave (8) need a dynamic value or split effects.
+(def drive-patterns (list
+    (list FX-SOLID 0 0xFFFFFFFFu32 0x00FF0000u32 0) ; white / red
+    nil ; battery
+    (list FX-SOLID 0 0x0000FFFFu32 0x00FF00FFu32 0) ; cyan / magenta
+    (list FX-SOLID 0 0x000000FFu32 0x0000FF00u32 0) ; blue / green
+    (list FX-SOLID 0 0x00FFFF00u32 0x0000FF00u32 0) ; yellow / green
+    (list FX-RAINBOW PAL-RGBW 0 0 CYC-RAINBOW)
+    (list FX-STROBE 0 0xFFFFFFFFu32 0xFFFFFFFFu32 CYC-STROBE)
+    (list FX-RAINBOW PAL-NEON 0 0 CYC-RAINBOW-RAVE)
+    (list FX-RAINBOW PAL-NEON 0 0 CYC-RAINBOW-RAVE) ; directional rave tail
+    (list FX-LARSON 0 0x00FF0000u32 0x00FF0000u32 CYC-LARSON)
+    (list FX-FELONY 0 0 0 CYC-FELONY)
+    (list FX-RAINBOW PAL-RGBW 0 0 CYC-RAINBOW-SLOW)))
+
+(defun drive-want (fx pal head-color tail-color spd val cyc) {
+    (seg-want head-seg fx pal head-color spd head-bri val cyc)
+    (seg-want tail-seg fx pal tail-color spd tail-bri val cyc)
+})
+
+(defun drive-gauge (spd)
+    (drive-want FX-GAUGE 0 0 0 spd (to-i (* 255.0 battery-percent-remaining)) 0))
+
 (defun apply-drive-mode (mode) {
-    (cond
-        ((= mode 0) { ; White / Red
-            (seg-want-fx head-seg FX-SOLID 0 0xFFFFFFFFu32 32 head-bri)
-            (seg-want-fx tail-seg FX-SOLID 0 0x00FF0000u32 32 tail-bri)
+    (if (= mode 1)
+        (drive-gauge (if bms-is-charging 32 0))
+        {
+            (var pattern (ix drive-patterns (if (and (>= mode 0) (< mode 12)) mode 0)))
+            (var cyc (ix pattern 4))
+            (drive-want (ix pattern 0) (ix pattern 1) (ix pattern 2) (ix pattern 3)
+                (if (= cyc 0) 32 0) 0 cyc)
+            (if (= mode 8)
+                (seg-want-fx head-seg FX-SOLID 0 0xFFFFFFFFu32 32 head-bri))
         })
-        ((= mode 1) { ; Battery
-            (seg-want-gauge head-seg (to-i (* 255.0 battery-percent-remaining)) (if bms-is-charging 32 0) head-bri)
-            (seg-want-gauge tail-seg (to-i (* 255.0 battery-percent-remaining)) (if bms-is-charging 32 0) tail-bri)
-        })
-        ((= mode 2) { ; Cyan / Magenta
-            (seg-want-fx head-seg FX-SOLID 0 0x0000FFFFu32 32 head-bri)
-            (seg-want-fx tail-seg FX-SOLID 0 0x00FF00FFu32 32 tail-bri)
-        })
-        ((= mode 3) { ; Blue / Green
-            (seg-want-fx head-seg FX-SOLID 0 0x000000FFu32 32 head-bri)
-            (seg-want-fx tail-seg FX-SOLID 0 0x0000FF00u32 32 tail-bri)
-        })
-        ((= mode 4) { ; Yellow / Green
-            (seg-want-fx head-seg FX-SOLID 0 0x00FFFF00u32 32 head-bri)
-            (seg-want-fx tail-seg FX-SOLID 0 0x0000FF00u32 32 tail-bri)
-        })
-        ((= mode 5) { ; Rainbow - the same set as the footpad and button bars,
-                      ; which draw this pattern too
-            (seg-want-cyc head-seg FX-RAINBOW PAL-RGBW 0 CYC-RAINBOW head-bri)
-            (seg-want-cyc tail-seg FX-RAINBOW PAL-RGBW 0 CYC-RAINBOW tail-bri)
-        })
-        ((= mode 6) { ; Strobe - 4.7 Hz, ~13 frames per flash cycle
-            (seg-want-cyc head-seg FX-STROBE 0 0xFFFFFFFFu32 CYC-STROBE head-bri)
-            (seg-want-cyc tail-seg FX-STROBE 0 0xFFFFFFFFu32 CYC-STROBE tail-bri)
-        })
-        ((= mode 7) { ; Rave
-            (seg-want-cyc head-seg FX-RAINBOW PAL-NEON 0 CYC-RAINBOW-RAVE head-bri)
-            (seg-want-cyc tail-seg FX-RAINBOW PAL-NEON 0 CYC-RAINBOW-RAVE tail-bri)
-        })
-        ((= mode 8) { ; Rave directional - the tail shares mode 7's rave set, so
-                      ; switching between the two modes does not restart it
-            (seg-want-fx head-seg FX-SOLID 0 0xFFFFFFFFu32 32 head-bri)
-            (seg-want-cyc tail-seg FX-RAINBOW PAL-NEON 0 CYC-RAINBOW-RAVE tail-bri)
-        })
-        ((= mode 9) { ; Knight Rider - the sweep every strip takes 1.0 s over,
-                      ; whatever its length. The trade is pixel velocity: the
-                      ; longer strip's eye moves faster.
-            (seg-want-cyc head-seg FX-LARSON 0 0x00FF0000u32 CYC-LARSON head-bri)
-            (seg-want-cyc tail-seg FX-LARSON 0 0x00FF0000u32 CYC-LARSON tail-bri)
-        })
-        ((= mode 10) { ; Felony - 1.3 Hz red/blue alternation, ~48 frames. As a
-                       ; speed this was spd 4 and getting coarse: the next steps
-                       ; down were 0.95 and 0.63 Hz, with 0 not an option (the
-                       ; lib reads 0 as "unset"). A cycle time has none of that
-                       ; problem, being ms rather than a 1..255 divisor.
-            (seg-want-cyc head-seg FX-FELONY 0 0 CYC-FELONY head-bri)
-            (seg-want-cyc tail-seg FX-FELONY 0 0 CYC-FELONY tail-bri)
-        })
-        ((= mode 11) { ; Trans pride (slow rainbow sweep)
-            (seg-want-cyc head-seg FX-RAINBOW PAL-RGBW 0 CYC-RAINBOW-SLOW head-bri)
-            (seg-want-cyc tail-seg FX-RAINBOW PAL-RGBW 0 CYC-RAINBOW-SLOW tail-bri)
-        })
-        (t { ; unknown mode: same as White / Red
-            (seg-want-fx head-seg FX-SOLID 0 0xFFFFFFFFu32 32 head-bri)
-            (seg-want-fx tail-seg FX-SOLID 0 0x00FF0000u32 32 tail-bri)
-        })
-    )
 })
 
 ; Footpad split: the bar halves at its midpoint and the half matching the engaged
@@ -737,10 +683,9 @@
                     (setq direction current-direction)
                     (setq prev-direction current-direction)
                     (setq direction-change-start-time 0)
-                    (if (!= direction dbg-prev-direction) {
+                    (if (and (!= direction dbg-prev-direction) (dbg-active DBG-LED)) {
                         (setq dbg-prev-direction direction)
-                        (dbg DBG-LED (str-merge "led dir " (str-from-n direction "%d")
-                            " rpm " (str-from-n (to-float rpm) "%.0f")))
+                        (dbg-line (list "led dir" direction "rpm" (to-float rpm)))
                     })
                 })
             })
@@ -779,8 +724,8 @@
                     (set-config 'led-highbeam-on led-highbeam-on)
                 )
                 (setq control-store-pending (systime))
-                (dbg DBG-LED (str-merge "led mallgrab press on " (str-from-n (to-i led-on) "%d")
-                    " hb " (str-from-n (to-i led-highbeam-on) "%d")))
+                (if (dbg-active DBG-LED)
+                    (dbg-line (list "led mallgrab press on" (to-i led-on) "hb" (to-i led-highbeam-on))))
             })
             ; Outside the branch above so a release always disarms, whether or
             ; not it was allowed to act on it.
@@ -803,16 +748,11 @@
 
 ; ---- Decide ------------------------------------------------------------
 ; Everything the drawing phases need, nothing drawn. The lib eases brightness
-; (ext-esp_led-fade), so targets are set directly.
-(defun led-decide () {
-    (setq last-activity-sec (secs-since led-last-activity-time))
-    (setq can-activity-sec (secs-since can-last-activity-time))
+; (ext-esp_led-fade), so targets are set directly. Split into three forms so
+; none is large: a form and its expansion are both live while it is defined.
 
-    ; Mode and brightness. Later rules override earlier ones.
-    (var follow (lighting-override-active))
-    (var ride-bri (if follow lighting-ride led-brightness))
-    (var idle-bri (if follow lighting-idle led-brightness-idle))
-    (var stat-bri (if follow lighting-status led-brightness-status))
+; Mode and brightness. Later rules override earlier ones.
+(defun led-decide-mode (ride-bri idle-bri stat-bri) {
     (setq current-led-mode led-mode)
     (setq led-current-brightness (min ride-bri led-max-brightness))
     (if (= led-mall-grab 1)
@@ -824,43 +764,56 @@
     (if (and (vehicle-fresh) (= state 5))
         (setq led-current-brightness (min idle-bri led-max-brightness)))
     (setq led-startup-active
-        (and (< (secs-since 0) LED-STARTUP-SECONDS) (not (running-state))))
+        (and (integration-connecting) (< (secs-since 0) LED-STARTUP-SECONDS) (not (running-state))))
     (if led-startup-active
         (setq current-led-mode led-mode-startup))
+})
 
-    ; Highbeams: the strip facing the direction of travel lights its highbeam
-    ; (mode 1 = PWM pin, mode 2 = embedded overlay pixels) and the rest of that
-    ; strip dims by the configured ratio (0 = fully off, like the original).
+; Highbeams: the strip facing the direction of travel lights its highbeam
+; (mode 1 = PWM pin, mode 2 = embedded overlay pixels) and the rest of that
+; strip dims by the configured ratio (0 = fully off, like the original).
+; head faces the direction of travel. Paired with its brightness, so the
+; physical front strip always gets front-bri whichever way round it is.
+(defun led-decide-output (hb-bri stat-bri) {
     (var highbeam-active (and (= led-on 1) (= led-highbeam-on 1) (or (not (integration-selected)) (running-state)) (!= state 5)))
     (setq hb-front (and highbeam-active (>= direction 0) (> led-front-highbeam-mode 0)))
     (setq hb-rear (and highbeam-active (< direction 0) (> led-rear-highbeam-mode 0)))
-    (setq hb-frac (min (if follow ride-bri led-brightness-highbeam) led-max-brightness))
-
+    (setq hb-frac (min hb-bri led-max-brightness))
     (setq front-bri (bri255 (* led-current-brightness (if hb-front led-dim-on-highbeam-ratio 1.0))))
     (setq rear-bri (bri255 (* led-current-brightness (if hb-rear led-dim-on-highbeam-ratio 1.0))))
     (setq status-bri (bri255 (min stat-bri led-max-brightness)))
     (setq aux-bri (bri255 led-current-brightness))
-
-    ; head faces the direction of travel. Paired with its brightness, so the
-    ; physical front strip always gets front-bri whichever way round it is.
     (setq head-seg (if (> direction 0) seg-front seg-rear))
     (setq tail-seg (if (> direction 0) seg-rear seg-front))
     (setq head-bri (if (> direction 0) front-bri rear-bri))
     (setq tail-bri (if (> direction 0) rear-bri front-bri))
+})
 
-    ; Means "the shutoff branch runs", carrying the branches that outrank it -
-    ; otherwise a long handtest kept front and rear breathing while the footpad
-    ; went dark. The footpad strip honours it too; button/status stay independent.
+; lights-off means "the shutoff branch runs", carrying the branches that
+; outrank it - otherwise a long handtest kept front and rear breathing while
+; the footpad went dark. The footpad strip honours it too; button/status stay
+; independent.
+(defun led-decide-flags () {
     (setq lights-off (and (vehicle-fresh) (!= state 15)
                           (not handtest-mode)
                           (> last-activity-sec idle-timeout-shutoff)
                           (< can-activity-sec 1)
                           (!= state 5)))
-
     (setq braking (and (= led-brake-light-enabled 1)
                        (running-state)
                        (!= state 5)
                        (<= tot-current led-brake-light-min-amps)))
+})
+
+(defun led-decide () {
+    (setq last-activity-sec (secs-since led-last-activity-time))
+    (setq can-activity-sec (secs-since can-last-activity-time))
+    (var follow (lighting-override-active))
+    (var ride-bri (if follow lighting-ride led-brightness))
+    (var stat-bri (if follow lighting-status led-brightness-status))
+    (led-decide-mode ride-bri (if follow lighting-idle led-brightness-idle) stat-bri)
+    (led-decide-output (if follow ride-bri led-brightness-highbeam) stat-bri)
+    (led-decide-flags)
 })
 
 ; Edge-triggered: the effective mode and the on/off state are what people
@@ -870,9 +823,7 @@
     (if (dbg-active DBG-LED) {
         (if (!= current-led-mode dbg-prev-led-mode) {
             (setq dbg-prev-led-mode current-led-mode)
-            (dbg DBG-LED (str-merge "led mode " (str-from-n current-led-mode "%d")
-                " idle " (str-from-n last-activity-sec "%.1f")
-                " bri " (str-from-n led-current-brightness "%.2f")))
+            (dbg-line (list "led mode" current-led-mode "idle" last-activity-sec "bri" led-current-brightness))
         })
         (if (!= (to-i led-on) dbg-prev-led-on) {
             (setq dbg-prev-led-on (to-i led-on))
@@ -881,17 +832,12 @@
         (var hb (+ (if hb-front 1 0) (if hb-rear 2 0)))
         (if (!= hb dbg-prev-hb) {
             (setq dbg-prev-hb hb)
-            (dbg DBG-LED (str-merge "led hb " (str-from-n hb "%d")
-                " " (str-from-n hb-frac "%.2f")))
+            (dbg-line (list "led hb" hb hb-frac))
         })
         (if (dbg-due 'led-state 5.0)
-            (dbg DBG-LED (str-merge "led bri " (str-from-n front-bri "%d")
-                " " (str-from-n rear-bri "%d")
-                " " (str-from-n status-bri "%d")
-                (if (lighting-override-active) " src provider" " src local")
-                " dir " (str-from-n direction "%d")
-                " mg " (str-from-n led-mall-grab "%d")
-                " age " (str-from-n can-activity-sec "%.2f"))))
+            (dbg-line (list "led bri" front-bri rear-bri status-bri
+                "src" (if (lighting-override-active) "provider" "local")
+                "dir" direction "mg" led-mall-grab "age" can-activity-sec)))
     })
 })
 
@@ -905,21 +851,17 @@
 ; inside, so a chain the lib refused (one wrongly-typed strip does it) left the
 ; PWM highbeam stuck at the 0.0 duty pwm-start gave it, with nothing wrong with
 ; the highbeam itself. Channel 0 is front, 1 is rear, matching led-setup-segments.
+; The duty for one channel, written only when it changes; returns the new one.
+(defun hb-pwm-duty (mode pin on last channel)
+    (if (hb-pwm-pin mode pin) {
+        (var d (if on hb-frac 0.0))
+        (if (!= d last) (pwm-set-duty d channel))
+        d
+    } last))
+
 (defun led-draw-highbeam-pwm () {
-    (if (and (= led-front-highbeam-mode 1) (>= led-front-highbeam-pin 0)) {
-        (var d (if hb-front hb-frac 0.0))
-        (if (!= d hb-duty-front) {
-            (pwm-set-duty d 0)
-            (setq hb-duty-front d)
-        })
-    })
-    (if (and (= led-rear-highbeam-mode 1) (>= led-rear-highbeam-pin 0)) {
-        (var d (if hb-rear hb-frac 0.0))
-        (if (!= d hb-duty-rear) {
-            (pwm-set-duty d 1)
-            (setq hb-duty-rear d)
-        })
-    })
+    (setq hb-duty-front (hb-pwm-duty led-front-highbeam-mode led-front-highbeam-pin hb-front hb-duty-front 0))
+    (setq hb-duty-rear (hb-pwm-duty led-rear-highbeam-mode led-rear-highbeam-pin hb-rear hb-duty-rear 1))
 })
 
 ; Mode 2: LEDs embedded in the strip as overlay pixels, so this one does need the
@@ -927,15 +869,12 @@
 ; embedded bars need a minimum drive before they light at all. The overlay channel
 ; is separate from the segment's effect, so it is unaffected by the strip dimming
 ; under it.
+(defun hb-overlay (seg mode on low high)
+    (if (= mode 2) (seg-overlay-bri seg (if on (bri255 (+ low (* (- high low) hb-frac))) 0))))
+
 (defun led-draw-highbeam-overlay () {
-    (if (= led-front-highbeam-mode 2) {
-        (seg-overlay-bri seg-front
-            (if hb-front (bri255 (+ led-front-highbeam-min (* (- led-front-highbeam-max led-front-highbeam-min) hb-frac))) 0))
-    })
-    (if (= led-rear-highbeam-mode 2) {
-        (seg-overlay-bri seg-rear
-            (if hb-rear (bri255 (+ led-rear-highbeam-min (* (- led-rear-highbeam-max led-rear-highbeam-min) hb-frac))) 0))
-    })
+    (hb-overlay seg-front led-front-highbeam-mode hb-front led-front-highbeam-min led-front-highbeam-max)
+    (hb-overlay seg-rear led-rear-highbeam-mode hb-rear led-rear-highbeam-min led-rear-highbeam-max)
 })
 
 ; Front and rear. The cond picks a base appearance; later rules override it by
@@ -947,28 +886,23 @@
         ; first in a first-match cond. It used to be a pass that ran after this
         ; cond, which is how it outranked things then - and why it flickered.
         ((display-battery-charging) {
-            (seg-want-gauge head-seg (to-i (* 255.0 battery-percent-remaining)) 32 head-bri)
-            (seg-want-gauge tail-seg (to-i (* 255.0 battery-percent-remaining)) 32 tail-bri)
+            (drive-gauge 32)
         })
         ((and (integration-connecting) (not led-startup-active)) {
-            (seg-want-cyc head-seg FX-BREATHE 0 0x000000FFu32 CYC-BREATHE head-bri)
-            (seg-want-cyc tail-seg FX-BREATHE 0 0x000000FFu32 CYC-BREATHE tail-bri)
+            (drive-want FX-BREATHE 0 0x000000FFu32 0x000000FFu32 0 0 CYC-BREATHE)
         })
         ((and (vehicle-fresh) (= state 15)) {
-            (seg-want-fx head-seg FX-SOLID 0 0x00FF0000u32 32 head-bri)
-            (seg-want-fx tail-seg FX-SOLID 0 0x00FF0000u32 32 tail-bri)
+            (drive-want FX-SOLID 0 0x00FF0000u32 0x00FF0000u32 32 0 0)
         })
         ((and (vehicle-fresh) handtest-mode) {
-            (seg-want-cyc head-seg FX-BREATHE 0 0x000000FFu32 CYC-BREATHE head-bri)
-            (seg-want-cyc tail-seg FX-BREATHE 0 0x000000FFu32 CYC-BREATHE tail-bri)
+            (drive-want FX-BREATHE 0 0x000000FFu32 0x000000FFu32 0 0 CYC-BREATHE)
         })
         (lights-off {
             (seg-want-off head-seg)
             (seg-want-off tail-seg)
         })
         ((and (or (= current-led-mode 1) (= led-mall-grab 1)) (battery-data-fresh)) {
-            (seg-want-gauge head-seg (to-i (* 255.0 battery-percent-remaining)) (if bms-is-charging 32 0) head-bri)
-            (seg-want-gauge tail-seg (to-i (* 255.0 battery-percent-remaining)) (if bms-is-charging 32 0) tail-bri)
+            (drive-gauge (if bms-is-charging 32 0))
         })
         ((= current-led-mode 1)
             (apply-drive-mode 0))
@@ -1012,13 +946,9 @@
             (setq dbg-led-overruns (+ dbg-led-overruns 1))
             (if (and (> (- 0 time-to-wait) (* led-loop-delay-sec 0.25))
                      (dbg-tick DBG-LED 'led-loop 5.0)) {
-                (dbg-warn (str-merge "led overrun " (str-from-n (- 0 time-to-wait) "%.4f")
-                    " n " (str-from-n dbg-led-overruns "%d")
-                    " want " (str-from-n led-loop-delay-sec "%.4f")
-                    " work " (str-from-n work "%.4f")
-                    " decide " (str-from-n (- dbg-led-t1 t-start) "%.4f")
-                    " status " (str-from-n (- dbg-led-t2 dbg-led-t1) "%.4f")
-                    " drive " (str-from-n (- dbg-led-t3 dbg-led-t2) "%.4f")))
+                (dbg-line (list "WARN led overrun" (- 0 time-to-wait) "n" dbg-led-overruns
+                    "want" led-loop-delay-sec "work" work "decide" (- dbg-led-t1 t-start)
+                    "status" (- dbg-led-t2 dbg-led-t1) "drive" (- dbg-led-t3 dbg-led-t2)))
                 (setq dbg-led-overruns 0)
             })
             (setq led-next-run-time (secs-since 0))
@@ -1031,9 +961,8 @@
 
 (defun led-loop () {
     (setq have-segs (led-start))
-    (dbg DBG-LED (str-merge "led start mode " (str-from-n led-mode "%d")
-        " idle " (str-from-n led-mode-idle "%d")
-        " hz " (str-from-n led-loop-delay "%d")))
+    (if (dbg-active DBG-LED)
+        (dbg-line (list "led start mode" led-mode "idle" led-mode-idle "hz" led-loop-delay)))
     ; A zero rate would divide by zero here and put the loop into a
     ; crash/restart cycle with the LEDs stuck on the last frame.
     (if (< led-loop-delay 1) {

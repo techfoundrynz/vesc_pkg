@@ -245,4 +245,14 @@
     (if (and integration-hooks (vehicle-fresh) (not sim-active))
         ((ix integration-hooks 3) jsy jsx bt-c bt-z is-rev)))
 
+; Pubmote input and its live UI snapshot.
+(defun remote-input (jsy jsx bt-c bt-z is-rev) {
+    (setq remote-last-jsy jsy)
+    (setq remote-last-jsx jsx)
+    (setq remote-last-bt-c bt-c)
+    (setq remote-last-bt-z bt-z)
+    (setq remote-last-is-rev is-rev)
+    (integration-control jsy jsx bt-c bt-z is-rev)
+})
+
 @const-end

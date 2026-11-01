@@ -46,7 +46,7 @@
     ; Discovery can take seconds; without this the first pass reports the
     ; whole of it as a loop overrun.
     (setq next-run-time (secs-since 0))
-    (loopwhile t {
+    (loop () t {
         (if (!= dbg-mask 0) (setq dbg-ticks-can (+ dbg-ticks-can 1)))
 
         (setq loop-start-time (secs-since 0))

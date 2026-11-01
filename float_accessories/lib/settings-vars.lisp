@@ -45,10 +45,10 @@
 (def hum-temp 0)
 
 ; Last input state received from the remote, for the QML input preview
-(def pubmote-last-jsy 0.0)
-(def pubmote-last-jsx 0.0)
-(def pubmote-last-bt-c 0)
-(def pubmote-last-bt-z 0)
-(def pubmote-last-is-rev 0)
+(def remote-last-jsy 0.0)
+(def remote-last-jsx 0.0)
+(def remote-last-bt-c 0)
+(def remote-last-bt-z 0)
+(def remote-last-is-rev 0)
 
 @const-end

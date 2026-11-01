@@ -28,29 +28,8 @@
 ; Naming: LispBM folds symbol case, so a function may not share a name with a
 ; DBG-* constant - (dbg-all) would BE the constant DBG-ALL.
 
-(def dbg-throttle (list
-    (cons 'cfg-ctl 0)
-    (cons 'can-tel 0)
-    (cons 'can-loop 0)
-    (cons 'can-overrun 0)
-    (cons 'can-frame 0)
-    (cons 'can-ctl 0)
-    (cons 'led-state 0)
-    (cons 'led-loop 0)
-    (cons 'bms-rx 0)
-    (cons 'bms-val 0)
-    (cons 'rem-tx 0)
-    (cons 'rem-txerr 0)
-    (cons 'rem-rx 0)
-    (cons 'rem-in 0)
-    (cons 'rem-drop 0)
-    (cons 'gnss-pos 0)
-    (cons 'gnss-nmea 0)
-    (cons 'gnss-err 0)
-    (cons 'hum-read 0)
-    (cons 'sdlog 0)
-    (cons 'cmd-rx 0)
-))
+; Throttle slots (key . last systime), created on first use. RAM, not const.
+(def dbg-throttle nil)
 
 @const-start
 
@@ -116,12 +95,15 @@
     (return nil)
 })
 
-; True at most once per `secs` for `key`. The table is only touched once the
-; category check has already passed (see dbg-tick), so a disabled category
-; costs nothing.
+; True at most once per `secs` for `key`; the first use is always due. The
+; table is only touched once the category check has passed (see dbg-tick), so
+; a disabled category costs nothing.
 (defunret dbg-due (key secs) {
     (var cell (dbg-cell key))
-    (if (eq cell nil) (return t)) ; unknown key: never throttle
+    (if (not cell) {
+        (setq dbg-throttle (cons (cons key (systime)) dbg-throttle))
+        (return t)
+    })
     (if (> (secs-since (cdr cell)) secs) {
         (setcdr cell (systime))
         (return t)
@@ -141,6 +123,17 @@
 ; its own line, which split every warning across two lines.
 (defun dbg-err (msg) (print (str-merge "ERR " msg)))
 (defun dbg-warn (msg) (print (str-merge "WARN " msg)))
+
+; Print one line from labels and values: integers as %d, floats as %g (keeps
+; the precision that matters, e.g. fw 6.05), strings as they are.
+(defun dbg-line (items) {
+    (var parts nil)
+    (loopforeach item items
+        (setq parts (cons (if (number? item)
+            (str-from-n item (if (eq (type-of item) 'type-float) "%g" "%d"))
+            item) parts)))
+    (print (str-join (reverse parts) " "))
+})
 
 ; ---- Control -------------------------------------------------------------
 
@@ -179,14 +172,11 @@
 ; thread has died or stalled: a loop that stops ticking shows 0 here long
 ; before its symptom (frozen LEDs, stale telemetry) is obvious.
 (defun dbg-loop () {
-    (loopwhile t {
+    (loop () t {
         (sleep 1.0)
         (if (dbg-active DBG-CORE)
-            (print (str-merge "hz led " (str-from-n dbg-ticks-led "%d")
-                " can " (str-from-n dbg-ticks-can "%d")
-                " bms " (str-from-n dbg-ticks-bms "%d")
-                " rem " (str-from-n pubmote-loop-ticks "%d")
-                " evt " (str-from-n dbg-ticks-evt "%d"))))
+            (dbg-line (list "hz led" dbg-ticks-led "can" dbg-ticks-can "bms" dbg-ticks-bms
+                "rem" pubmote-loop-ticks "evt" dbg-ticks-evt)))
         ; Reset unconditionally so the counters stay bounded even if the
         ; category is toggled off mid-second.
         (setq dbg-ticks-led 0)
@@ -204,53 +194,26 @@
 ; extension or an unbound var can't truncate the rest of the report.
 (defun diag () {
     (print "--- fa diag ---")
-    (trap (print (str-merge "ver " (to-str (get-version))
-        " esp_led " (to-str esp_led-version)
-        " fw " (str-from-n fw-num "%.2f")
-        " " (sysinfo 'hw-target)
-        " cpu " (str-from-n (sysinfo 'cpu-freq) "%d")
-        " up " (str-from-n (secs-since 0) "%.0f"))))
-    (trap (print (str-merge "canid " (str-from-n (get-config 'can-id) "%d")
-        " self " (str-from-n (can-local-id) "%d")
-        " provider " (str-from-n integration-id "%d")
-        " canage " (str-from-n (secs-since can-last-activity-time) "%.1f"))))
-    (trap (print (str-merge "cid led " (str-from-n led-context-id "%d")
-        " can " (str-from-n can-context-id "%d")
-        " bms " (str-from-n bms-context-id "%d")
-        " rem " (str-from-n pubmote-context-id "%d")
-        " gnss " (str-from-n gnss-context-id "%d")
-        " hum " (str-from-n humidity-context-id "%d")
-        " log " (str-from-n log-context-id "%d"))))
-    (trap (print (str-merge "state " (str-from-n state "%d")
-        " fault " (str-from-n fault-code "%d")
-        " sw " (str-from-n switch-state "%d")
-        " vin " (str-from-n (to-float vin) "%.1f")
-        " soc " (str-from-n (* 100.0 battery-percent-remaining) "%.0f")
-        " cells " (str-from-n series-cells "%d")
-        " rpm " (str-from-n (to-float rpm) "%.0f")
-        " duty " (str-from-n (to-float duty-cycle-now) "%.2f"))))
-    (trap (print (str-merge "seg st " (str-from-n seg-status "%d")
-        " fr " (str-from-n seg-front "%d")
-        " re " (str-from-n seg-rear "%d")
-        " fp " (str-from-n seg-footpad "%d")
-        " bt " (str-from-n seg-button "%d")
-        " on " (str-from-n (to-i led-on) "%d")
-        " hb " (str-from-n (to-i led-highbeam-on) "%d")
-        " mode " (str-from-n led-mode "%d")
-        " dir " (str-from-n direction "%d"))))
-    (trap (print (str-merge "bms age " (str-from-n (secs-since bms-last-activity-time) "%.1f")
-        " backend " (str-from-n bms-active-backend "%d")
-        " status " (str-from-n bms-status "%d")
-        " v " (str-from-n (get-bms-val 'bms-v-tot) "%.2f"))))
-    (trap (print (str-merge "rem conn " (str-from-n (is-pubmote-connected) "%d")
-        " pair " (str-from-n pubmote-pairing-state "%d")
-        " ble " (if pubmote-ble-paired "1" "0")
-        " ch " (str-from-n (if (> (conf-get 'wifi-mode) 0) (wifi-get-chan) -1) "%d"))))
-    (trap (print (str-merge "gnss age " (str-from-n (gnss-age) "%.1f")
-        " hdop " (str-from-n (gnss-hdop) "%.1f")
-        " " (to-str (gnss-lat-lon))
-        " hum " (str-from-n (to-float hum) "%.0f")
-        " sdlog " (if log-running "1" "0"))))
+    (trap (dbg-line (list "ver" (to-str (get-version)) "esp_led" (to-str esp_led-version)
+        "fw" fw-num (sysinfo 'hw-target) "cpu" (sysinfo 'cpu-freq) "up" (secs-since 0))))
+    (trap (dbg-line (list "canid" (get-config 'can-id) "self" (can-local-id)
+        "provider" integration-id "canage" (secs-since can-last-activity-time))))
+    (trap (dbg-line (list "cid led" led-context-id "can" can-context-id "bms" bms-context-id
+        "rem" pubmote-context-id "gnss" gnss-context-id "hum" humidity-context-id
+        "log" log-context-id)))
+    (trap (dbg-line (list "state" state "fault" fault-code "sw" switch-state
+        "vin" (to-float vin) "soc" (* 100.0 battery-percent-remaining) "cells" series-cells
+        "rpm" (to-float rpm) "duty" (to-float duty-cycle-now))))
+    (trap (dbg-line (list "seg st" seg-status "fr" seg-front "re" seg-rear "fp" seg-footpad
+        "bt" seg-button "on" (to-i led-on) "hb" (to-i led-highbeam-on) "mode" led-mode
+        "dir" direction)))
+    (trap (dbg-line (list "bms age" (secs-since bms-last-activity-time)
+        "backend" bms-active-backend "status" bms-status "v" (get-bms-val 'bms-v-tot))))
+    (trap (dbg-line (list "rem conn" (is-pubmote-connected) "pair" pubmote-pairing-state
+        "ble" (if pubmote-ble-paired 1 0)
+        "ch" (if (> (conf-get 'wifi-mode) 0) (wifi-get-chan) -1))))
+    (trap (dbg-line (list "gnss age" (gnss-age) "hdop" (gnss-hdop) (to-str (gnss-lat-lon))
+        "hum" (to-float hum) "sdlog" (if log-running 1 0))))
     (dbg-status)
 })
 

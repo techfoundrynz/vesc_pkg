@@ -5,8 +5,11 @@ import re
 import subprocess
 import tempfile
 import unittest
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from compact_package import tighten_source
 IMPORT = re.compile(r'^\(import "([^"]+)" \'([^)\s]+)\)')
 EVAL = re.compile(r'^\(read-eval-program ([^)\s]+)\)')
 
@@ -72,7 +75,8 @@ class EntryPointTests(unittest.TestCase):
 """
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "load.lisp"
-            path.write_text(program)
+            # Exercise the compacted token stream used by the installed package.
+            path.write_bytes(tighten_source(program.encode()))
             result = subprocess.run([os.environ["LBM_TEST_RUNNER"], "-h", "262144", str(path)],
                                     text=True, errors="replace", capture_output=True, timeout=30)
             self.assertIn("SUCCESS", result.stdout, (result.stdout + result.stderr)[-5000:])

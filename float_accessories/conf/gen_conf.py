@@ -202,6 +202,7 @@ PARAMS = [
     ("pubmote_secret_code", "Pairing Secret", (I, -2147483648, 2147483647, ""), -1,
      "Pairing secret. Set by the pairing flow."),
 
+
     # --- BMS --------------------------------------------------------------
     ("bms_type", "BMS Type", (I, 0, 10, ""), 0,
      "BMS variant."),

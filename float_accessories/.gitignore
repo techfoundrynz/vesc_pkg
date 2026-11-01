@@ -1,4 +1,8 @@
 float_accessories.vescpkg
+float_accessories_*.vescpkg
+.fa-build-*.lisp
+.fa-build-*.qml
+.fa-build-*.vescpkg
 fa_cfg/*.bin
 fa_cfg/*.elf
 fa_cfg/*.lisp
