@@ -222,8 +222,8 @@
 })
 
 (defun status () {
-    ; Retry the creation notice until QML sees it, including a late-loaded UI.
-    (if startup-image-created (send-data "fa-image-created"))
+    ; A snapshot, not a one-shot event: late-loaded pages recover readiness.
+    (fa-boot-status)
       ; Built as a list and joined once: accumulating with str-merge copies the
       ; growing string every step, which at the QML poll rate was the main source
       ; of lbm memory churn between GC cycles.

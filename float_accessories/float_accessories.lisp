@@ -8,6 +8,18 @@
 (import "../lib_esp_led_strip/esp_led_strip/esp_led_strip_esp32s31.bin" 'esp_led-esp32s31)
 
 @const-start
+; Boot state protocol, shared with QML's numbered boot states:
+; 1 loading code, 2 loading native libraries, 3 creating image,
+; 4 starting accessories, 5 ready, 6 image creation failed.
+(def fa-boot-state 1)
+(defun fa-boot-status ()
+    (send-data (str-merge "fa-boot-state " (str-from-n fa-boot-state "%d"))))
+(defun fa-set-boot-state (state) {
+    (setq fa-boot-state state)
+    (fa-boot-status)
+})
+(fa-boot-status)
+
 ; Every bundled file must be imported here: VESC Tool ignores imports inside
 ; imported files. The firmware binds each tag when its line runs, so all
 ; imports come first and lib/entry/*.lisp then evaluate them per feature.
@@ -103,8 +115,6 @@
 (def boot-t-main 0.0)
 (def boot-t-libs 0.0)
 (def boot-t-led 0.0)
-; Saved as nil: only the cold start announces creation, until QML acknowledges.
-(def startup-image-created nil)
 
 (defun main () (run-main t))
 
@@ -112,9 +122,14 @@
 ; The first parse has already loaded it before saving the extension table.
 (defun run-main (reload-libs) {
     (setq boot-t-main (secs-since 0))
-    (if reload-libs (load-native-libs))
+    (if reload-libs {
+        (fa-set-boot-state 2)
+        (load-native-libs)
+    })
+    (fa-set-boot-state 4)
     (setup)
     (init)
+    (fa-set-boot-state 5)
     (print (str-merge "Boot " (str-from-n (secs-since 0) "%.3f") "s"
         " (code " (str-from-n boot-t-main "%.3f")
         " libs " (str-from-n (- boot-t-libs boot-t-main) "%.3f")
@@ -265,10 +280,16 @@
 ; Register native extension names before saving the table. Otherwise each warm
 ; boot appends their names to flash again. main reloads/rebinds their executable
 ; code on image boots; this first start reuses the libraries just loaded here.
+(fa-set-boot-state 2)
 (load-native-libs)
+(fa-set-boot-state 3)
 (print "FA saving startup image")
-(if (not (image-save)) (exit-error "Could not save startup image"))
+{
+(var image-result (trap (image-save)))
+(if (or (eq (ix image-result 0) 'exit-error) (not (ix image-result 1))) {
+    (fa-set-boot-state 6)
+    (exit-error "Could not save startup image")
+})
+}
 (print "FA startup image saved")
-(setq startup-image-created t)
-(send-data "fa-image-created")
 (run-main nil)

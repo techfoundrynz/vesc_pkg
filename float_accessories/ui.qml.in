@@ -307,6 +307,19 @@ Item {
         return ""
     }
 
+    // Numeric boot protocol shared with float_accessories.lisp.
+    readonly property int bootWaiting: 0
+    readonly property int bootLoadingCode: 1
+    readonly property int bootLoadingLibraries: 2
+    readonly property int bootCreatingImage: 3
+    readonly property int bootStarting: 4
+    readonly property int bootReady: 5
+    readonly property int bootFailed: 6
+    property string bootLoadingText: qsTr("Preparing first boot: loading package…")
+    property int bootState: container.bootWaiting
+    property bool bootConfigRequested: false
+    property int bootConfigRetryTicks: 0
+    readonly property bool packageReady: readConfig && bootState === container.bootReady
     property bool readConfig: false
     property bool wasConnected: false
     property int debugMask: 0
@@ -634,6 +647,8 @@ Item {
         target: VescIf
         function onCustomConfigLoadDone() {
             mCustomConf = VescIf.customConfig(faConfigIndex)
+            bootConfigRequested = false
+            if (bootState === container.bootReady) reloadMissingConfigAfterBoot()
         }
     }
 
@@ -641,24 +656,90 @@ Item {
         if (!mCustomConf) {
             mCustomConf = VescIf.customConfig(faConfigIndex)
         }
-        return mCustomConf ? true : false
+        return !!mCustomConf && mCustomConf.hasParam("led_enabled")
     }
 
     property bool configReloadRequested: false
 
-    // Lisp announces successful image creation and retries until acknowledged.
-    // Tool may have enumerated configs earlier, during the initial parse.
-    function handleStartupImageCreated() {
-        sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(setq startup-image-created nil)")
-        reloadMissingConfigAfterBoot()
+    function applyBootState(state) {
+        if (!isFinite(state) || state !== Math.floor(state)
+                || state < container.bootLoadingCode || state > container.bootFailed) return
+        var becameReady = state === container.bootReady && bootState !== container.bootReady
+        bootState = state
+        if (becameReady) bootConfigRequested = false
+        if (state === container.bootReady) reloadMissingConfigAfterBoot(becameReady)
     }
 
-    function reloadMissingConfigAfterBoot() {
-        if (configReloadRequested || resolveCustomConf()) {
-            return
+    function pollBootProgress() {
+        // Keep boot polling on the app transport: Lisp statistics temporarily
+        // pause the evaluator and can interfere with startup's own pause.
+        if (bootState === container.bootReady && !readConfig) {
+            bootConfigRetryTicks++
+            if (bootConfigRetryTicks >= 3) {
+                bootConfigRetryTicks = 0
+                bootConfigRequested = false
+                reloadMissingConfigAfterBoot()
+            }
         }
-        configReloadRequested = true
-        startupConfigReloadTimer.start()
+    }
+
+    function applyBootLog(message) {
+        var text = message.replace(/\0/g, "").trim()
+        if (text.charAt(0) === '"' && text.charAt(text.length - 1) === '"')
+            text = text.substring(1, text.length - 1)
+        var module = /^FA loaded (core|bms|vehicle|telemetry|led|pubmote|app)$/.exec(text)
+        if (module) {
+            bootLoadingText = qsTr("Loading") + " " + module[1] + "..."
+            bootState = container.bootLoadingCode
+        } else if (text.indexOf("FA saving startup image") === 0) {
+            applyBootState(container.bootCreatingImage)
+        } else if (text.indexOf("FA startup image saved") === 0) {
+            applyBootState(container.bootStarting)
+        } else if (text.indexOf("Preparing new image") === 0) {
+            bootLoadingText = qsTr("Preparing first boot: preparing image storage…")
+            bootState = container.bootLoadingCode
+        } else if (/^Parsing \d+ characters/.test(text)) {
+            bootLoadingText = qsTr("Preparing first boot: parsing package…")
+            bootState = container.bootLoadingCode
+        }
+    }
+
+    function bootProgressStep() {
+        switch (bootState) {
+        case container.bootLoadingCode: return 1
+        case container.bootLoadingLibraries: return 2
+        case container.bootCreatingImage: return 3
+        case container.bootStarting: return 4
+        case container.bootReady: return 5
+        default: return 0
+        }
+    }
+
+    function bootStatusText() {
+        switch (bootState) {
+        case container.bootLoadingCode: return bootLoadingText
+        case container.bootLoadingLibraries: return qsTr("Loading native libraries…")
+        case container.bootCreatingImage: return qsTr("Preparing first boot: creating startup image…")
+        case container.bootStarting: return qsTr("Starting package…")
+        case container.bootReady: return qsTr("Loading settings…")
+        case container.bootFailed: return qsTr("Could not create startup image. Check the Lisp console.")
+        default: return VescIf.isPortConnected() ? qsTr("Waiting for package to start...")
+                        : lastStatusTime <= 60 ? qsTr("Connecting to the board…")
+                                           : qsTr("No connection to the board")
+        }
+    }
+
+    function reloadMissingConfigAfterBoot(forceRead) {
+        if (readConfig && !forceRead) return
+        if (resolveCustomConf()) {
+            if (!bootConfigRequested) {
+                bootConfigRequested = true
+                mCommands.customConfigGet(faConfigIndex, false)
+            }
+        } else if (!configReloadRequested) {
+            configReloadRequested = true
+            startupConfigReloadTimer.start()
+        }
     }
 
     Timer {
@@ -667,6 +748,8 @@ Item {
         onTriggered: {
             if (!resolveCustomConf()) {
                 VescIf.reloadFirmware()
+            } else {
+                reloadMissingConfigAfterBoot()
             }
         }
     }
@@ -867,6 +950,9 @@ Item {
         repeat: true
         triggeredOnStart: true
         onTriggered: {
+            // Before the app handler starts, firmware log messages show progress.
+            // Once running, status includes a persistent boot-state snapshot.
+            pollBootProgress()
             sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(status)")
             lastStatusTime++
             integrationLastStatusTime++
@@ -2098,24 +2184,38 @@ Item {
             id: loadingPane
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: !readConfig
+            visible: !packageReady
 
             ColumnLayout {
                 anchors.centerIn: parent
                 spacing: 16
 
-                BusyIndicator {
+                // Progress marks completed stages, rather than estimating time.
+                ProgressBar {
                     Layout.alignment: Qt.AlignHCenter
-                    running: loadingPane.visible
+                    Layout.preferredWidth: Math.min(320, Math.max(0, loadingPane.width - 48))
+                    from: 0
+                    to: 5
+                    value: packageReady ? 5 : Math.max(0, bootProgressStep() - 1)
+                    indeterminate: loadingPane.visible && (bootState === container.bootWaiting
+                        || bootState === container.bootLoadingCode)
+                    visible: bootState !== container.bootFailed
+                }
+
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    color: Qt.rgba(1, 1, 1, 0.6)
+                    visible: bootProgressStep() > 0
+                    text: qsTr("Step %1 of 5").arg(bootProgressStep())
                 }
 
                 Text {
                     Layout.alignment: Qt.AlignHCenter
                     horizontalAlignment: Text.AlignHCenter
                     color: Qt.rgba(1, 1, 1, 0.6)
-                    text: !statusTimeout ? qsTr("Loading settings…")
-                        : (lastStatusTime <= 60 ? qsTr("Connecting to the board…")
-                        : qsTr("No connection to the board"))
+                    Layout.maximumWidth: Math.max(0, loadingPane.width - 32)
+                    wrapMode: Text.WordWrap
+                    text: bootStatusText()
                 }
             }
         }
@@ -2123,7 +2223,7 @@ Item {
         TabBar {
             id: tabBar
             Layout.fillWidth: true
-            visible: readConfig
+            visible: packageReady
 
             TabButton {
                 id: primaryTabButton
@@ -2298,7 +2398,7 @@ Item {
             id: stackLayout
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: readConfig
+            visible: packageReady
             currentIndex: tabBar.currentIndex
 
             // LED Control Tab
@@ -5977,8 +6077,17 @@ Item {
     Connections {
         target: mCommands
 
+        function onLispPrintReceived(str) {
+            applyBootLog(str)
+        }
+
         function onCustomAppDataReceived(data) {
             var str = data.toString()
+            var bootMessage = str.replace(/\0/g, "").trim()
+            if (bootMessage.indexOf("fa-boot-state ") === 0) {
+                applyBootState(Number(bootMessage.substring(14)))
+                return
+            }
 
             if (!wasConnected) {
                 // Read settings on initial message
@@ -5991,9 +6100,7 @@ Item {
                 sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(send-debug)")
             }
 
-            if (str.replace(/\0/g, "").trim() === "fa-image-created") {
-                handleStartupImageCreated()
-            } else if (str.startsWith("debug ")) {
+            if (str.startsWith("debug ")) {
                 // parseInt rather than Number: it stops at the trailing NUL
                 // the lisp string carries instead of returning NaN.
                 applyDebugMask(parseInt(str.split(" ")[1], 10) || 0)
