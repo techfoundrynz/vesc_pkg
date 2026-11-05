@@ -83,7 +83,7 @@ float_accessories_%.vescpkg: $(PACKAGE_DEPS)
 
 clean:
 	rm -f float_accessories.vescpkg
-	rm -f float_accessories_esp32c3.vescpkg float_accessories_esp32c6.vescpkg float_accessories_esp32s3.vescpkg
+	rm -f $(addprefix float_accessories_,$(addsuffix .vescpkg,$(ESP_TARGETS)))
 	rm -f README-gen.md ui.qml
 	for t in $(ESP_TARGETS); do \
 		$(MAKE) -C fa_cfg ESP_TARGET=$$t clean; \

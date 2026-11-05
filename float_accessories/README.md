@@ -21,7 +21,7 @@ My Blog: <a href='https://sylerclayton.com'>https://sylerclayton.com</a>
 <H3>Release Notes</H3>
 
 <ul>
-  <li>Native libraries are bundled for ESP32-C3, ESP32-C6 and ESP32-S3 only, to leave flash for the startup image. Other chips report an unsupported-target error.</li>
+  <li>Native libraries are bundled for ESP32-C3, ESP32-C6, ESP32-S3 and ESP32-S31 only, to leave flash for the startup image. Other chips report an unsupported-target error.</li>
   <li>New LED backend</li>
   <li>SSBMS support over UART (115200 baud, configurable RX/TX pins) or BLE (VESC Express LispBM BLE client; set the Express Bluetooth LispBM role to Client): read-only cell, temperature and charging telemetry, estimated SoC, and VESC BMS CAN reporting.</li>
   <li>Standalone mode runs local lighting and accessories without Refloat discovery, telemetry polling or remote-control forwarding.</li>
@@ -31,8 +31,9 @@ My Blog: <a href='https://sylerclayton.com'>https://sylerclayton.com</a>
 
 <H3>Building</H3>
 
-- `make`: universal package (`float_accessories.vescpkg`) plus separate C3, C6 and S3 packages.
+- `make`: universal package (`float_accessories.vescpkg`) plus separate C3, C6, S3 and S31 packages.
 - `make float_accessories.vescpkg`: universal package only.
 - `make PACKAGE_TARGET=esp32c3`: C3 package.
 - `make PACKAGE_TARGET=esp32c6`: C6 package.
 - `make PACKAGE_TARGET=esp32s3`: S3 package.
+- `make PACKAGE_TARGET=esp32s31`: S31 package.

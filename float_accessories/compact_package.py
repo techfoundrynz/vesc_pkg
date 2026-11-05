@@ -141,7 +141,7 @@ def compact_lisp(data):
     return result
 
 
-TARGETS = ("esp32c3", "esp32c6", "esp32s3")
+TARGETS = ("esp32c3", "esp32c6", "esp32s3", "esp32s31")
 
 
 def target_lisp(data, target):

@@ -38,12 +38,14 @@ class CompactPackageTests(unittest.TestCase):
         root = b'''(import "fa_esp32c3.bin" 'native-c3)
 (import "fa_esp32c6.bin" 'native-c6)
 (import "fa_esp32s3.bin" 'native-s3)
+(import "fa_esp32s31.bin" 'native-s31)
 (import "ow.lisp" 'ow)(import "aux.lisp" 'aux)
 (read-eval-program ow)(read-eval-program aux)
 '''
         imports = [(b"native-c3", b"\x01\x02\x03\0"),
                    (b"native-c6", b"\x07\x08\x09\0"),
                    (b"native-s3", b"\x04\x05\x06\0"),
+                   (b"native-s31", b"\x0a\x0b\x0c\0"),
                    (b"ow", b"(def ow-enabled t)\0"),
                    (b"aux", b"(def aux-enabled t)\0")]
         original = package_fields([(b"name", b"Float Accessories"),
@@ -51,7 +53,8 @@ class CompactPackageTests(unittest.TestCase):
                                    (b"qmlFile", b"Item {}")])
         for target, keep, remove in (("esp32c3", b"native-c3", b"native-s3"),
                                      ("esp32c6", b"native-c6", b"native-c3"),
-                                     ("esp32s3", b"native-s3", b"native-c3")):
+                                     ("esp32s3", b"native-s3", b"native-c3"),
+                                     ("esp32s31", b"native-s31", b"native-c3")):
             result, _, _ = compact.compact_package(original, target)
             fields = dict(unpack_fields(result))
             new_root, new_imports = compact.unpack_lisp(fields[b"lispData"])

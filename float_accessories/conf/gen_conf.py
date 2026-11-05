@@ -10,7 +10,9 @@
 
 import os
 from pathlib import Path
-from pin_caps import emit_header
+from pin_caps import TARGETS, emit_header
+
+GPIO_MAX = max(caps["max"] for caps in TARGETS.values())
 
 # (name, longName, kind, default, extra, description)
 # kind: "bool" | ("int", min, max, suffix) | ("float", min, max, step, suffix)
@@ -103,7 +105,7 @@ PARAMS = [
     # --- LEDs: front strip ----------------------------------------------
     ("led_front_timing", "Front Strip", (E, STRIP_TIMINGS), 0,
      "Front strip: disabled, or the wire timing preset to drive it with."),
-    ("led_front_pin", "Front Pin", (I, -1, 54, ""), 8,
+    ("led_front_pin", "Front Pin", (I, -1, GPIO_MAX, ""), 8,
      "GPIO of the front strip data line."),
     ("led_front_num", "Front LED Count", (I, 0, 512, ""), 11,
      "Number of LEDs on the front strip (highbeam LEDs not included)."),
@@ -114,7 +116,7 @@ PARAMS = [
     ("led_front_highbeam_mode", "Front Highbeam", (E, HIGHBEAM_MODES), 0,
      "Front highbeam hardware: a separate PWM-driven pin, or LEDs embedded"
      " in the strip itself."),
-    ("led_front_highbeam_pin", "Front Highbeam Pin", (I, -1, 54, ""), -1,
+    ("led_front_highbeam_pin", "Front Highbeam Pin", (I, -1, GPIO_MAX, ""), -1,
      "PWM highbeam GPIO for the front (highbeam mode PWM Pin)."),
     ("led_front_highbeam_pos", "Front Highbeam Positions",
      (I, -2147483648, 2147483647, ""), -1,
@@ -133,7 +135,7 @@ PARAMS = [
     # --- LEDs: rear strip -----------------------------------------------
     ("led_rear_timing", "Rear Strip", (E, STRIP_TIMINGS), 0,
      "Rear strip: disabled, or the wire timing preset to drive it with."),
-    ("led_rear_pin", "Rear Pin", (I, -1, 54, ""), 9,
+    ("led_rear_pin", "Rear Pin", (I, -1, GPIO_MAX, ""), 9,
      "GPIO of the rear strip data line."),
     ("led_rear_num", "Rear LED Count", (I, 0, 512, ""), 11,
      "Number of LEDs on the rear strip (highbeam LEDs not included)."),
@@ -144,7 +146,7 @@ PARAMS = [
     ("led_rear_highbeam_mode", "Rear Highbeam", (E, HIGHBEAM_MODES), 0,
      "Rear highbeam hardware: a separate PWM-driven pin, or LEDs embedded"
      " in the strip itself."),
-    ("led_rear_highbeam_pin", "Rear Highbeam Pin", (I, -1, 54, ""), -1,
+    ("led_rear_highbeam_pin", "Rear Highbeam Pin", (I, -1, GPIO_MAX, ""), -1,
      "PWM highbeam GPIO for the rear (highbeam mode PWM Pin)."),
     ("led_rear_highbeam_pos", "Rear Highbeam Positions",
      (I, -2147483648, 2147483647, ""), -1,
@@ -163,7 +165,7 @@ PARAMS = [
     # --- LEDs: status bar -----------------------------------------------
     ("led_status_timing", "Status Strip", (E, STRIP_TIMINGS), 0,
      "Status bar: disabled, or the wire timing preset to drive it with."),
-    ("led_status_pin", "Status Pin", (I, -1, 54, ""), 7,
+    ("led_status_pin", "Status Pin", (I, -1, GPIO_MAX, ""), 7,
      "GPIO of the status bar data line."),
     ("led_status_num", "Status LED Count", (I, 0, 512, ""), 10,
      "Number of LEDs on the status bar."),
@@ -176,7 +178,7 @@ PARAMS = [
     ("led_footpad_timing", "Footpad Strip", (E, STRIP_TIMINGS), 0,
      "Footpad strip: disabled, or the wire timing preset to drive it"
      " with."),
-    ("led_footpad_pin", "Footpad Pin", (I, -1, 54, ""), -1,
+    ("led_footpad_pin", "Footpad Pin", (I, -1, GPIO_MAX, ""), -1,
      "GPIO of the footpad strip data line."),
     ("led_footpad_num", "Footpad LED Count", (I, 0, 512, ""), 0,
      "Number of LEDs on the footpad strip."),
@@ -189,7 +191,7 @@ PARAMS = [
     ("led_button_timing", "Button LED", (E, STRIP_TIMINGS), 0,
      "Single button LED: disabled, or the wire timing preset to drive it"
      " with."),
-    ("led_button_pin", "Button Pin", (I, -1, 54, ""), -1,
+    ("led_button_pin", "Button Pin", (I, -1, GPIO_MAX, ""), -1,
      "GPIO of the button LED data line."),
 
     # --- Pubmote ---------------------------------------------------------
@@ -208,13 +210,13 @@ PARAMS = [
      "BMS variant."),
     ("bms_rs485_chip", "RS485 Chip", (I, 0, 3, ""), 1,
      "RS485 transceiver variant."),
-    ("bms_rs485_di_pin", "RS485 DI Pin", (I, -1, 54, ""), 16,
+    ("bms_rs485_di_pin", "RS485 DI Pin", (I, -1, GPIO_MAX, ""), 16,
      "GPIO wired to the transceiver DI."),
-    ("bms_rs485_ro_pin", "RS485 RO Pin", (I, -1, 54, ""), 8,
+    ("bms_rs485_ro_pin", "RS485 RO Pin", (I, -1, GPIO_MAX, ""), 8,
      "GPIO wired to the transceiver RO."),
-    ("bms_rs485_dere_pin", "RS485 DE/RE Pin", (I, -1, 54, ""), 17,
+    ("bms_rs485_dere_pin", "RS485 DE/RE Pin", (I, -1, GPIO_MAX, ""), 17,
      "GPIO wired to the transceiver DE/RE."),
-    ("bms_wakeup_pin", "BMS Wakeup Pin", (I, -1, 54, ""), -1,
+    ("bms_wakeup_pin", "BMS Wakeup Pin", (I, -1, GPIO_MAX, ""), -1,
      "GPIO that wakes the BMS, -1 if unused."),
     ("bms_override_soc", "Override SOC", (I, 0, 1, ""), 0,
      "Report the locally estimated SOC instead of the BMS one."),
@@ -250,18 +252,18 @@ PARAMS = [
      "Telemetry log sample rate."),
     ("log_append_gnss", "Log GNSS", (B,), 0,
      "Append GNSS position to log samples (needs GNSS enabled)."),
-    ("humidity_sda_pin", "Humidity SDA Pin", (I, -1, 54, ""), -1,
+    ("humidity_sda_pin", "Humidity SDA Pin", (I, -1, GPIO_MAX, ""), -1,
      "I2C SDA GPIO of the humidity sensor."),
-    ("humidity_slc_pin", "Humidity SCL Pin", (I, -1, 54, ""), -1,
+    ("humidity_slc_pin", "Humidity SCL Pin", (I, -1, GPIO_MAX, ""), -1,
      "I2C SCL GPIO of the humidity sensor."),
 
     # --- GNSS -------------------------------------------------------------
     ("gnss_type", "GNSS Type", (E, ["u-blox (UBX)", "NMEA (UART)"]), 0,
      "u-blox modules are driven by the firmware driver; any other NMEA"
      " module is read from a plain UART."),
-    ("gnss_rx_pin", "GNSS RX Pin", (I, -1, 54, ""), -1,
+    ("gnss_rx_pin", "GNSS RX Pin", (I, -1, GPIO_MAX, ""), -1,
      "GPIO wired to the module's TX output."),
-    ("gnss_tx_pin", "GNSS TX Pin", (I, -1, 54, ""), -1,
+    ("gnss_tx_pin", "GNSS TX Pin", (I, -1, GPIO_MAX, ""), -1,
      "GPIO wired to the module's RX input. Required for u-blox, optional"
      " for NMEA (read-only)."),
     ("gnss_uart_num", "GNSS UART", (I, 0, 2, ""), 1,
@@ -299,10 +301,10 @@ PARAMS = [
      "Paired SSBMS BLE address bytes 4-5, then address type (0 public,"
      " 1 random), then 1 when paired. 0 means not paired (first found). Set"
      " by Connect in the SSBMS BLE scan list of the package UI."),
-    ("ssbms_uart_rx_pin", "SSBMS UART RX Pin", (I, -1, 54, ""), -1,
+    ("ssbms_uart_rx_pin", "SSBMS UART RX Pin", (I, -1, GPIO_MAX, ""), -1,
      "ESP UART receive GPIO, connected to SSBMS TX. -1 means unassigned."
      " SSBMS uses UART 1 at 115200 baud (8N1)."),
-    ("ssbms_uart_tx_pin", "SSBMS UART TX Pin", (I, -1, 54, ""), -1,
+    ("ssbms_uart_tx_pin", "SSBMS UART TX Pin", (I, -1, GPIO_MAX, ""), -1,
      "ESP UART transmit GPIO, connected to SSBMS RX. -1 means unassigned."
      " SSBMS uses UART 1 at 115200 baud (8N1)."),
 ]

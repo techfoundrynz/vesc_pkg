@@ -13,6 +13,10 @@ static void *active_arg;
 #define ARG active_arg
 #include "code.c"
 
+// GPIO tests do not initialize the BMS extensions.
+void bms_extensions_init(void) {}
+
+
 static unsigned stores;
 static unsigned errors;
 static unsigned char persisted[4096];
@@ -61,6 +65,9 @@ int main(void) {
 #ifdef EXPECT_S3_GAP
         expected = expected && (pin < 22 || pin > 25);
 #endif
+#ifdef EXPECT_S31_GAPS
+        expected = expected && pin != 29 && pin != 41;
+#endif
         assert(fa_gpio_valid(pin) == expected);
     }
     // Every GPIO field is covered, including disabled features; -1 stays valid.
@@ -79,6 +86,14 @@ int main(void) {
 #ifdef EXPECT_S3_GAP
         for (int n = 22; n <= 25; n++) {
             supplied = (float)n;
+            assert(ext_facfg_set(args, 2) == host_if.lbm_enc_sym_eerror);
+            assert(*pin == 1);
+        }
+#endif
+#ifdef EXPECT_S31_GAPS
+        const int gaps[] = {29, 41};
+        for (unsigned n = 0; n < sizeof(gaps) / sizeof(gaps[0]); n++) {
+            supplied = (float)gaps[n];
             assert(ext_facfg_set(args, 2) == host_if.lbm_enc_sym_eerror);
             assert(*pin == 1);
         }

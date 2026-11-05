@@ -60,6 +60,7 @@ def build(vesc_tool, target=None):
                         "--testPkgDesc", "custom:Devkit C3",
                         "--testPkgDesc", "custom:Devkit C6 FH4",
                         "--testPkgDesc", "custom:rESCue S3",
+                        "--testPkgDesc", "custom:Devkit S31 N16R16V",
                         "--testPkgDesc", "vesc:test"], cwd=ROOT, check=True)
         packed, before, after = compact_package.compact_package(temporary[2].read_bytes(), target)
         temporary[2].write_bytes(packed)

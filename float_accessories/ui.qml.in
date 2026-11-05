@@ -255,16 +255,26 @@ Item {
 
     function gpioPinValid(pin) {
         var caps = gpioTargets[gpioTarget]
-        return pin === -1 || (caps && isFinite(pin) && pin === Math.floor(pin)
-            && pin >= 0 && pin <= caps.max
-            && (caps.gap.length === 0 || pin < caps.gap[0] || pin > caps.gap[1]))
+        if (pin === -1) return true
+        if (!caps || !isFinite(pin) || pin !== Math.floor(pin) || pin < 0 || pin > caps.max)
+            return false
+        for (var i = 0; i < caps.gap.length; i += 2) {
+            if (pin >= caps.gap[i] && pin <= caps.gap[i + 1]) return false
+        }
+        return true
     }
 
     function gpioRangeDescription() {
         var caps = gpioTargets[gpioTarget]
         if (!caps) return "Waiting for device GPIO capabilities."
-        return caps.gap.length === 0 ? "0-" + caps.max
-            : "0-" + (caps.gap[0] - 1) + ", " + (caps.gap[1] + 1) + "-" + caps.max
+        var ranges = []
+        var start = 0
+        for (var i = 0; i < caps.gap.length; i += 2) {
+            ranges.push(start + "-" + (caps.gap[i] - 1))
+            start = caps.gap[i + 1] + 1
+        }
+        ranges.push(start + "-" + caps.max)
+        return ranges.join(", ")
     }
 
     function pinConfigurationError() {

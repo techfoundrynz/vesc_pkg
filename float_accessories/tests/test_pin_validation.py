@@ -31,7 +31,7 @@ bool confparser_deserialize_faconfig(const uint8_t *, FaConfig *);
 void confparser_set_defaults_faconfig(FaConfig *);
 ''')
             (tmp / "confxml.h").write_text("#define data_faconfig_ ((uint8_t *)0)\n#define DATA_FACONFIG__SIZE 0\n")
-            for target, maximum in [("esp32c3",21),("esp32c6",30),("esp32s3",48),("esp32p4",54)]:
+            for target, maximum in [("esp32c3",21),("esp32c6",30),("esp32s3",48),("esp32p4",54),("esp32s31",61)]:
                 with self.subTest(target=target):
                     binary = tmp / target
                     command = ["gcc", "-std=gnu99", "-O2", "-ffunction-sections", "-fdata-sections",
@@ -39,6 +39,7 @@ void confparser_set_defaults_faconfig(FaConfig *);
                         "-DEXPECT_MAX="+str(maximum), "-I"+str(tmp), "-I"+str(ROOT.parent / "c_libs"),
                         str(ROOT / "tests/pin_config.c"), "-o", str(binary)]
                     if target == "esp32s3": command.insert(1,"-DEXPECT_S3_GAP")
+                    if target == "esp32s31": command.insert(1,"-DEXPECT_S31_GAPS")
                     result = subprocess.run(command,text=True,capture_output=True)
                     self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                     subprocess.run([str(binary)],check=True,capture_output=True)
@@ -72,7 +73,7 @@ void confparser_set_defaults_faconfig(FaConfig *);
     def test_all_gpio_fields_are_tagged_and_have_shared_ui_policy(self):
         pins = [p for p in gen_conf.PARAMS if p[0].endswith("_pin")]
         self.assertEqual(len(pins),17)
-        self.assertTrue(all(p[2][1:3] == (-1,54) for p in pins))
+        self.assertTrue(all(p[2][1:3] == (-1,61) for p in pins))
         qml = (ROOT / "ui.qml.in").read_text(encoding="utf-8")
         for key, *_ in pins:
             self.assertIn('getParamInt("'+key+'")',qml)
@@ -100,18 +101,22 @@ void confparser_set_defaults_faconfig(FaConfig *);
         program += '''
 const assert=require('assert');
 assert(pinConfigurationError().includes('Waiting'));
-for (const [target,max] of [['esp32c3',21],['esp32c6',30],['esp32s3',48],['esp32p4',54]]) {
+for (const [target,max] of [['esp32c3',21],['esp32c6',30],['esp32s3',48],['esp32p4',54],['esp32s31',61]]) {
   gpioTarget=target;
   for(let pin=-5;pin<=100;pin++) {
-    const expected=pin===-1 || (pin>=0&&pin<=max&&(target!=='esp32s3'||pin<22||pin>25));
+    const expected=pin===-1 || (pin>=0&&pin<=max&&(target!=='esp32s3'||pin<22||pin>25)&&(target!=='esp32s31'||(pin!==29&&pin!==41)));
     assert.equal(!!gpioPinValid(pin),expected,target+':'+pin);
   }
+  if(target==='esp32s31') assert.equal(gpioRangeDescription(),'0-28, 30-40, 42-61');
   assert.equal(pinConfigurationError(),'');
   assert(!gpioPinValid(1.5)); assert(!gpioPinValid(NaN));
 }
 '''
         for widget in widgets:
             program += f"gpioTarget='esp32s3'; {widget}.value=22; assert(pinConfigurationError().includes('invalid')); {widget}.value=-1;\n"
+        for widget in widgets:
+            for pin in (29, 41):
+                program += f"gpioTarget='esp32s31'; {widget}.value={pin}; assert(pinConfigurationError().includes('invalid')); {widget}.value=-1;\n"
         # Script via stdin as UTF-8 bytes: argv is encoded with the locale's
         # codec, which fails on the UI's en dashes under a latin-1 locale.
         result=subprocess.run([node,"-"],input=program.encode("utf-8"),capture_output=True)
