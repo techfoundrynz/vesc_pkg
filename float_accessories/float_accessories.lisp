@@ -224,7 +224,7 @@
     (setq boot-t-led (secs-since 0))
 
     (spawn-event-handler-with-restart)
-    (event-enable 'event-data-rx)
+    (enable-app-data-events)
     (event-enable 'event-esp-now-rx)
 })
 

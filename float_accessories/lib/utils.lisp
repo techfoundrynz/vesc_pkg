@@ -23,6 +23,21 @@
     )
 )
 
+(defun enable-app-data-events () {
+    (var res (trap (event-enable 'event-data-rx-source)))
+    (if (eq (ix res 0) 'exit-error) (event-enable 'event-data-rx))
+})
+
+; Keep asynchronous replies on the requesting link, including trapped commands.
+(defun command-rx-from (source data) {
+    (var res (trap {
+        (app-data-reply source)
+        (command-rx data)
+    }))
+    (app-data-reply 0)
+    (dispatch-trapped "command-rx" res)
+})
+
 (defun event-handler ()
     (loop () t
         (recv
@@ -32,6 +47,10 @@
                     (dbg DBG-REM (str-merge "rem rx " (str-from-n (buflen data) "%d")
                         " rssi " (str-from-n rssi "%d"))))
                 (dispatch-trapped "pubmote-rx" (trap (pubmote-rx src des data rssi)))
+            })
+            ((event-data-rx-source (? source) . (? data)) {
+                (if (!= dbg-mask 0) (setq dbg-ticks-evt (+ dbg-ticks-evt 1)))
+                (command-rx-from source data)
             })
             ((event-data-rx . (? data)) {
                 (if (!= dbg-mask 0) (setq dbg-ticks-evt (+ dbg-ticks-evt 1)))
