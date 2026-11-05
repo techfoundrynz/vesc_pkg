@@ -937,7 +937,6 @@ Item {
             if (remainingTime <= 0) {
                 pairingTimeout = true;
                 sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(pubmote-pair -2)");  // Automatically reject if time runs out
-                mCommands.customConfigGet(faConfigIndex, false)
                 pubmotePairPopup.close();
             }
         }
@@ -1033,7 +1032,6 @@ Item {
                     Layout.preferredWidth: 1  // even split, not by label width
                     onClicked: {
                         sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(pubmote-pair -2)");  // Reject pairing manually
-                        mCommands.customConfigGet(faConfigIndex, false)
                         pubmotePairPopup.close();
                     }
                 }
@@ -1047,7 +1045,6 @@ Item {
                     onClicked: {
                         if (!pairingTimeout) {
                             sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(pubmote-pair -1)");  // Accept pairing
-                            mCommands.customConfigGet(faConfigIndex, false)
                             pubmotePairPopup.close();
                         }
                     }
@@ -4094,7 +4091,6 @@ Item {
                                     onClicked: {
                                         if (isPubmotePaired) {
                                             sendCode(String.fromCharCode(102) + String.fromCharCode(1) + "(pubmote-pair -2)");
-                                            mCommands.customConfigGet(faConfigIndex, false)
                                         } else {
                                             pubmotePairPopup.open();  // Open the confirmation popup with the random code
                                         }
@@ -5962,6 +5958,13 @@ Item {
         return result;
     }
 
+    function applyPubmotePairingState(state) {
+        pubmotePairingState = state
+        // Idle is reported after pairing saves the MAC, or unpairing clears it.
+        // Reading on the button click can return the previous configuration.
+        if (state === 0) mCommands.customConfigGet(faConfigIndex, false)
+    }
+
     function unpackUint32ToBytes(packedValue) {
         return [
             (packedValue >> 24) & 0xFF,
@@ -6124,7 +6127,7 @@ Item {
                 pubmoteVersionStr = newVersion;
             } else if (str.startsWith("pairing-status")) {
                 var tokens = str.split(" ");
-                pubmotePairingState = Number(tokens[1]);
+                applyPubmotePairingState(parseInt(tokens[1], 10));
             } else if (str.startsWith("ssbms-state ")) {
                 applySsbmsTelemetry(str)
             } else if (str.startsWith("input-state")) {
