@@ -2,7 +2,7 @@ VESC_TOOL ?= vesc_tool
 PYTHON ?= python3
 
 # One binary per chip - native libs only run on the chip they were built for.
-ESP_TARGETS = esp32c3 esp32c6 esp32s3 esp32p4
+ESP_TARGETS = esp32c3 esp32c6 esp32s3 esp32s31 esp32p4
 
 # Single source of truth for the version, stamped into README-gen.md and into
 # esp_led_version.lisp - which float_accessories imports too.
