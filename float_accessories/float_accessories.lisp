@@ -1,9 +1,5 @@
-(import "fa_cfg/fa_cfg_esp32c3.bin" 'facfg-esp32c3)
-(import "fa_cfg/fa_cfg_esp32c6.bin" 'facfg-esp32c6)
-(import "fa_cfg/fa_cfg_esp32s3.bin" 'facfg-esp32s3)
-(import "../lib_esp_led_strip/esp_led_strip/esp_led_strip_esp32c3.bin" 'esp_led-esp32c3)
-(import "../lib_esp_led_strip/esp_led_strip/esp_led_strip_esp32c6.bin" 'esp_led-esp32c6)
-(import "../lib_esp_led_strip/esp_led_strip/esp_led_strip_esp32s3.bin" 'esp_led-esp32s3)
+(import "fa_cfg/fa_cfg_esp32s31.bin" 'facfg-esp32s31)
+(import "../lib_esp_led_strip/esp_led_strip/esp_led_strip_esp32s31.bin" 'esp_led-esp32s3)
 
 @const-start
 ; Every bundled file must be imported here: VESC Tool ignores imports inside
@@ -75,13 +71,11 @@
     (check-platform)
     (var target (sysinfo 'hw-target))
     (var libs (cond
-        ((= (str-cmp target "esp32c3") 0) (list facfg-esp32c3 esp_led-esp32c3))
-        ((= (str-cmp target "esp32c6") 0) (list facfg-esp32c6 esp_led-esp32c6))
-        ((= (str-cmp target "esp32s3") 0) (list facfg-esp32s3 esp_led-esp32s3))
+        ((= (str-cmp target "esp32s31") 0) (list facfg-esp32s3 esp_led-esp32s31))
         (t nil)
     ))
     (if (eq libs nil) {
-        (exit-error (str-merge "No native libs for target " target " (supported: esp32c3, esp32c6, esp32s3)"))
+        (exit-error (str-merge "No native libs for target " target " (supported: esp32s31)"))
     })
     (var r-cfg (trap (load-native-lib (ix libs 0))))
     (if (eq (ix r-cfg 0) 'exit-error)

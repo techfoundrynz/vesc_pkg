@@ -3,13 +3,13 @@ PYTHON ?= python3
 LBM_TEST_RUNNER ?= /tmp/fa_lbm_runner
 
 # One binary per chip - native libs only run on the chip they were built for.
-ESP_TARGETS = esp32c3 esp32c6 esp32s3
+ESP_TARGETS = esp32c3 esp32c6 esp32s3 esp32s31
 PACKAGE_TARGET ?= all
 ifeq ($(PACKAGE_TARGET),all)
 PACKAGE_OUTPUTS = float_accessories.vescpkg $(addprefix float_accessories_,$(addsuffix .vescpkg,$(ESP_TARGETS)))
 else
-ifeq ($(filter $(PACKAGE_TARGET),esp32c3 esp32c6 esp32s3),)
-$(error PACKAGE_TARGET must be all, esp32c3, esp32c6 or esp32s3)
+ifeq ($(filter $(PACKAGE_TARGET),esp32c3 esp32c6 esp32s3 esp32s31),)
+$(error PACKAGE_TARGET must be all, esp32c3, esp32c6, esp32s3 or esp32s31)
 endif
 PACKAGE_OUTPUTS = float_accessories_$(PACKAGE_TARGET).vescpkg
 endif
@@ -76,6 +76,8 @@ float_accessories.vescpkg: $(PACKAGE_DEPS)
 float_accessories_esp32c3.vescpkg: ESP_TARGETS = esp32c3
 float_accessories_esp32c6.vescpkg: ESP_TARGETS = esp32c6
 float_accessories_esp32s3.vescpkg: ESP_TARGETS = esp32s3
+float_accessories_esp32s31.vescpkg: ESP_TARGETS = esp32s31
+
 float_accessories_%.vescpkg: $(PACKAGE_DEPS)
 	$(PYTHON) build_package.py --vesc-tool "$(VESC_TOOL)" --target "$*"
 
