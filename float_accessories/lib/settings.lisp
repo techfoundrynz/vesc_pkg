@@ -255,7 +255,7 @@
         (str-from-n (express-ble-role) "%d")
     ) " "))
 
-    (if (= (is-pubmote-connected) 1) {
+    (if (and (= (is-pubmote-connected) 1) pubmote-version-received) {
         (send-data (str-merge "pubmote-info " (to-str (ix pubmote-version 0)) "." (to-str (ix pubmote-version 1)) "." (to-str (ix pubmote-version 2))))
     })
 })

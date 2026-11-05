@@ -32,6 +32,7 @@
 (def pubmote-channel-locked 0)
 (def pubmote-channel-locked-timeout 10) ; How many seconds of no activity to wait before unlocking locked wifi channel
 (def pubmote-version '(0 0 0))
+(def pubmote-version-received nil)
 (def pubmote-api-version 2) ; 2: phase/battery utilization after duty in SET_CORE_DATA
 (def pubmote-vehicle-type PUBMOTE_VEHICLE_UNSPECIFIED)
 (def pubmote-prev-connected -1)

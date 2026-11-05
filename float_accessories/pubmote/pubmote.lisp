@@ -118,6 +118,8 @@
 (defunret pubmote-pair (pairing) {
     (cond
         ((>= pairing 0) {
+            (setq pubmote-version-received nil)
+            (setq pubmote-version '(0 0 0))
             (pubmote-set-cfg 'pubmote-secret-code (to-i32 pairing))
             (setq pubmote-pairing-timer (systime))
             (pubmote-set-pair-state PUBMOTE_PAIR_INITIATED)
@@ -139,6 +141,8 @@
 
         ; Pairing rejected
         ((= pairing -2) {
+            (setq pubmote-version-received nil)
+            (setq pubmote-version '(0 0 0))
             (pubmote-set-cfg 'pubmote-remote-mac-a -1)
             (pubmote-save-cfg)
 
@@ -264,20 +268,25 @@
             (if (= (buflen data) 8) {
                 (pubmote-reset-last-activity-time)
                 (setq pubmote-version (list (bufget-u8 data 5) (bufget-u8 data 6) (bufget-u8 data 7)))
+                (setq pubmote-version-received t)
                 (pubmote-info (str-merge "Pubmote remote version " (to-str pubmote-version)))
             })
         })
 
         ((= cmd PUBMOTE_CMD_VERSION_REC) {
             (pubmote-reset-last-activity-time)
-            (var tmpbuf (bufcreate 8))
-            (bufset-u8 tmpbuf 0 PUBMOTE_CMD_VERSION_REC)
-            (bufset-i32 tmpbuf 1 (pubmote-get-cfg 'pubmote-secret-code))
-            (bufset-u16 tmpbuf 5 pubmote-api-version 'little-endian)
-            (bufset-u8 tmpbuf 7 pubmote-vehicle-type)
+            ; The remote retries both version packets until it learns our
+            ; vehicle type. Do not finish that exchange if its version was lost.
+            (if pubmote-version-received {
+                (var tmpbuf (bufcreate 8))
+                (bufset-u8 tmpbuf 0 PUBMOTE_CMD_VERSION_REC)
+                (bufset-i32 tmpbuf 1 (pubmote-get-cfg 'pubmote-secret-code))
+                (bufset-u16 tmpbuf 5 pubmote-api-version 'little-endian)
+                (bufset-u8 tmpbuf 7 pubmote-vehicle-type)
 
-            (pubmote-send-packet (if is-ble '() pubmote-remote-mac) tmpbuf is-ble)
-            (free tmpbuf)
+                (pubmote-send-packet (if is-ble '() pubmote-remote-mac) tmpbuf is-ble)
+                (free tmpbuf)
+            })
         })
 
         ((= cmd PUBMOTE_CMD_SET_INPUT_STATE) {
